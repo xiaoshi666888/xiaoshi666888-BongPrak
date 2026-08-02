@@ -1,0 +1,2000 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Mini App</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --primary: #FF5722;
+            --bg: #FFFFFF;
+            --bg-image: none;
+            --overlay: rgba(255, 255, 255, 0);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            min-height: 100vh;
+            padding: 16px 16px 96px;
+            background-color: var(--bg);
+            background-image: var(--bg-image);
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+            transition: background-color 0.3s;
+            position: relative;
+        }
+
+        body.has-bg-image::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background: var(--overlay);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        body > * {
+            position: relative;
+            z-index: 1;
+        }
+
+        h1, .section-title { color: var(--primary); }
+
+        .lang-bar {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .lang-label {
+            width: 100%;
+            text-align: center;
+            font-size: 0.8125rem;
+            color: #666;
+            margin-bottom: 4px;
+        }
+
+        .lang-btn {
+            border: 1px solid rgba(0, 0, 0, 0.15);
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            padding: 6px 14px;
+            font-size: 0.875rem;
+            cursor: pointer;
+        }
+
+        .lang-btn.active {
+            font-weight: 600;
+            border-color: var(--primary);
+            background: var(--primary);
+            color: #fff;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        }
+
+        .shop-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .shop-logo {
+            width: 48px;
+            height: 48px;
+            border-radius: 10px;
+            object-fit: cover;
+            display: none;
+            background: #f0f0f0;
+        }
+
+        h1 { font-size: 1.5rem; margin-bottom: 0; }
+        .section-title { font-size: 1rem; font-weight: 600; margin-bottom: 12px; }
+
+        .menu-list {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .category-block {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .category-title {
+            font-size: 0.9375rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .menu-empty {
+            background: #f5f5f5;
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
+            color: #888;
+            font-size: 0.875rem;
+        }
+
+        .menu-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 12px;
+            background: #f7f7f7;
+        }
+
+        .menu-item-thumb {
+            width: 56px;
+            height: 56px;
+            border-radius: 10px;
+            object-fit: cover;
+            background: linear-gradient(135deg, #eee, #ddd);
+            flex-shrink: 0;
+        }
+
+        .menu-item-info { flex: 1; min-width: 0; }
+        .menu-item-name { font-weight: 600; margin-bottom: 4px; }
+        .menu-item-price { color: #666; font-size: 0.875rem; }
+
+        .btn-add {
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 50%;
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #fff;
+            background: var(--primary);
+            cursor: pointer;
+            flex-shrink: 0;
+            line-height: 1;
+        }
+
+        .cart-bar {
+            position: fixed;
+            left: 16px;
+            right: 16px;
+            bottom: 16px;
+            z-index: 20;
+            display: none;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 18px;
+            border: none;
+            border-radius: 16px;
+            background: var(--primary);
+            color: #fff;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+            cursor: pointer;
+            width: auto;
+        }
+
+        .cart-bar.visible { display: flex; }
+        .cart-bar-left { font-weight: 600; }
+        .cart-bar-right { font-weight: 700; }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.45);
+            z-index: 30;
+            display: none;
+            align-items: flex-end;
+            justify-content: center;
+            padding: 16px;
+        }
+
+        .modal-backdrop.open { display: flex; }
+
+        .cart-modal {
+            width: 100%;
+            max-width: 480px;
+            max-height: 85vh;
+            overflow: auto;
+            background: #fff;
+            border-radius: 20px 20px 16px 16px;
+            padding: 20px;
+            box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.15);
+        }
+
+        .cart-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .cart-modal-header h2 {
+            font-size: 1.125rem;
+            color: var(--primary);
+        }
+
+        .modal-close {
+            border: none;
+            background: #eee;
+            border-radius: 8px;
+            width: 36px;
+            height: 36px;
+            cursor: pointer;
+            font-size: 1.125rem;
+        }
+
+        .cart-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px;
+            padding: 12px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .cart-row-name { font-weight: 600; margin-bottom: 4px; }
+        .cart-row-price { color: #666; font-size: 0.875rem; }
+
+        .cart-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .qty-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 8px;
+            background: #eee;
+            cursor: pointer;
+            font-weight: 700;
+        }
+
+        .qty-value { min-width: 20px; text-align: center; font-weight: 600; }
+
+        .remove-btn {
+            border: none;
+            background: transparent;
+            color: #c62828;
+            cursor: pointer;
+            font-size: 0.8125rem;
+            text-decoration: underline;
+        }
+
+        .cart-modal-total {
+            display: flex;
+            justify-content: space-between;
+            margin: 16px 0;
+            font-size: 1.0625rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .submit-order-btn {
+            width: 100%;
+            border: none;
+            border-radius: 12px;
+            padding: 14px;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #fff;
+            background: var(--primary);
+            cursor: pointer;
+        }
+
+        .submit-order-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .toast {
+            position: fixed;
+            left: 50%;
+            bottom: 100px;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.85);
+            color: #fff;
+            padding: 12px 18px;
+            border-radius: 12px;
+            z-index: 40;
+            display: none;
+            max-width: 90%;
+            text-align: center;
+        }
+
+        .toast.show { display: block; }
+
+        .top-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .link-btn {
+            border: 1px solid rgba(0,0,0,0.12);
+            background: rgba(255,255,255,0.92);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 0.875rem;
+            cursor: pointer;
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .queue-status-card {
+            display: none;
+            margin: 0 0 12px;
+            padding: 12px;
+            border-radius: 12px;
+            background: #fff8e1;
+            border: 1px solid #ffe082;
+            color: #5d4037;
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }
+        .queue-status-card.show { display: block; }
+        .queue-status-card.ordering {
+            background: #e8f5e9;
+            border-color: #81c784;
+            color: #1b5e20;
+        }
+        .queue-join-row {
+            display: flex;
+            gap: 8px;
+            margin: 12px 0;
+            align-items: center;
+        }
+        .queue-join-row input {
+            width: 90px;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 12px;
+            font-size: 15px;
+        }
+        .queue-primary-btn,
+        .queue-secondary-btn,
+        .join-community-btn,
+        .preorder-btn {
+            width: 100%;
+            margin-top: 10px;
+            border: none;
+            border-radius: 10px;
+            padding: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .queue-primary-btn { background: var(--primary); color: #fff; }
+        .queue-secondary-btn { background: #eee; color: #333; }
+        .join-community-btn {
+            background: #0088cc;
+            color: #fff;
+            display: none;
+        }
+        .join-community-btn.show { display: block; }
+        .preorder-btn {
+            background: #2e7d32;
+            color: #fff;
+            display: none;
+        }
+        .preorder-btn.show { display: block; }
+
+        .coupon-row {
+            display: flex;
+            gap: 8px;
+            margin: 12px 0;
+        }
+
+        .coupon-row input {
+            flex: 1;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 0.9375rem;
+        }
+
+        .coupon-row button, .apply-coupon-btn {
+            border: none;
+            background: var(--primary);
+            color: #fff;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .coupon-msg {
+            font-size: 0.8125rem;
+            color: #555;
+            margin-bottom: 8px;
+            min-height: 1.2em;
+        }
+
+        .coupon-msg.ok { color: #2e7d32; }
+        .coupon-msg.err { color: #c62828; }
+
+        .discount-line {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9375rem;
+            margin-bottom: 6px;
+            color: #2e7d32;
+        }
+
+        .coupon-item {
+            padding: 12px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .coupon-item:last-child { border-bottom: none; }
+
+        .coupon-code {
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .share-referral-btn,
+        .share-shop-btn,
+        .tiktok-submit-btn {
+            width: 100%;
+            margin-top: 10px;
+            border: none;
+            color: #fff;
+            border-radius: 10px;
+            padding: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            display: none;
+        }
+
+        .share-referral-btn { background: #0088cc; }
+        .share-shop-btn { background: #25a3e0; }
+        .tiktok-submit-btn { background: #111; }
+
+        .share-referral-btn.show,
+        .share-shop-btn.show,
+        .tiktok-submit-btn.show { display: block; }
+
+        .tiktok-banner {
+            display: none;
+            margin-top: 12px;
+            padding: 12px;
+            border-radius: 10px;
+            background: #fff3e8;
+            border: 1px solid #ffc48a;
+            color: #333;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .tiktok-banner.show { display: block; }
+
+        .tiktok-input {
+            width: 100%;
+            box-sizing: border-box;
+            margin: 12px 0;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            font-size: 15px;
+        }
+
+        .tiktok-modal-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .tiktok-modal-actions button {
+            flex: 1;
+            border: none;
+            border-radius: 10px;
+            padding: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        #tiktokCancelBtn {
+            background: #eee;
+            color: #333;
+        }
+
+        #tiktokSendBtn {
+            background: var(--primary);
+            color: #fff;
+        }
+
+        .points-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            background: rgba(255,255,255,0.95);
+            border-radius: 12px;
+            padding: 10px 12px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+        }
+        .points-text { font-weight: 600; color: #333; }
+        .redeem-btn {
+            border: none;
+            background: var(--primary);
+            color: #fff;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .reviews-section {
+            margin-top: 20px;
+            background: rgba(255,255,255,0.95);
+            border-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+        }
+        .reviews-track {
+            display: flex;
+            gap: 12px;
+            overflow-x: auto;
+            scroll-snap-type: x mandatory;
+            padding-bottom: 6px;
+            -webkit-overflow-scrolling: touch;
+        }
+        .review-card {
+            min-width: 220px;
+            max-width: 260px;
+            scroll-snap-align: start;
+            background: #fafafa;
+            border-radius: 12px;
+            padding: 12px;
+            border: 1px solid #eee;
+        }
+        .review-card img {
+            width: 100%;
+            height: 120px;
+            object-fit: cover;
+            border-radius: 8px;
+            margin-top: 8px;
+        }
+        .review-stars { color: #FFB300; letter-spacing: 1px; }
+        .review-name { font-weight: 600; margin-top: 4px; }
+        .review-comment { font-size: 0.875rem; color: #555; margin-top: 6px; }
+
+        .festival-banner {
+            display: none;
+            margin: 0 0 14px;
+            padding: 14px 16px;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #ff8a65 0%, #ff5252 45%, #ffc107 100%);
+            color: #fff;
+            box-shadow: 0 6px 18px rgba(255, 82, 82, 0.28);
+            animation: festivalPulse 2.8s ease-in-out infinite;
+        }
+        .festival-banner.show { display: block; }
+        .festival-banner-title {
+            font-weight: 800;
+            font-size: 1.05rem;
+            letter-spacing: 0.2px;
+        }
+        .festival-banner-msg {
+            margin-top: 4px;
+            font-size: 0.9rem;
+            opacity: 0.95;
+        }
+        @keyframes festivalPulse {
+            0%, 100% { transform: translateY(0); filter: saturate(1); }
+            50% { transform: translateY(-1px); filter: saturate(1.08); }
+        }
+        .veg-toggle-wrap {
+            display: none;
+            margin: 0 0 12px;
+        }
+        .veg-toggle-wrap.show { display: block; }
+        .veg-toggle-btn {
+            width: 100%;
+            border: 1px solid #4caf50;
+            background: #e8f5e9;
+            color: #2e7d32;
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .veg-toggle-btn.active {
+            background: #43a047;
+            color: #fff;
+        }
+        .price-old {
+            text-decoration: line-through;
+            color: #999;
+            margin-right: 6px;
+            font-size: 0.8rem;
+        }
+        .price-sale { color: #d84315; font-weight: 700; }
+    </style>
+</head>
+<body>
+    <div class="lang-bar">
+        <span class="lang-label" id="langLabel"></span>
+        <button class="lang-btn" data-lang="en" type="button">EN</button>
+        <button class="lang-btn" data-lang="km" type="button">KM</button>
+        <button class="lang-btn" data-lang="zh" type="button">中文</button>
+    </div>
+
+    <div class="top-actions">
+        <button class="link-btn" id="queueBtn" type="button"></button>
+        <button class="link-btn" id="myCouponsBtn" type="button"></button>
+    </div>
+
+    <div class="points-bar" id="pointsBar">
+        <span class="points-text" id="pointsText"></span>
+        <button class="redeem-btn" id="redeemBtn" type="button"></button>
+    </div>
+
+    <div class="queue-status-card" id="queueStatusCard"></div>
+    <button class="preorder-btn" id="preorderBtn" type="button"></button>
+
+    <div class="card">
+        <div class="shop-header">
+            <img class="shop-logo" id="shopLogo" alt="">
+            <h1 id="shopName"></h1>
+        </div>
+
+        <div class="festival-banner" id="festivalBanner">
+            <div class="festival-banner-title" id="festivalBannerTitle"></div>
+            <div class="festival-banner-msg" id="festivalBannerMsg"></div>
+        </div>
+        <div class="veg-toggle-wrap" id="vegToggleWrap">
+            <button class="veg-toggle-btn" id="vegToggleBtn" type="button"></button>
+        </div>
+
+        <p class="section-title" id="menuTitle"></p>
+        <div class="menu-list" id="menuList"></div>
+    </div>
+
+    <div class="reviews-section" id="reviewsSection" style="display:none;">
+        <p class="section-title" id="reviewsTitle"></p>
+        <div class="reviews-track" id="reviewsTrack"></div>
+    </div>
+
+    <button class="cart-bar" id="cartBar" type="button">
+        <span class="cart-bar-left" id="cartBarQty"></span>
+        <span class="cart-bar-right" id="cartBarTotal"></span>
+    </button>
+
+    <div class="modal-backdrop" id="cartModal">
+        <div class="cart-modal">
+            <div class="cart-modal-header">
+                <h2 id="cartModalTitle"></h2>
+                <button class="modal-close" id="cartModalClose" type="button">×</button>
+            </div>
+            <div id="cartModalList"></div>
+            <div class="coupon-row">
+                <input id="couponInput" type="text" autocomplete="off" />
+                <button class="apply-coupon-btn" id="applyCouponBtn" type="button"></button>
+            </div>
+            <div class="coupon-msg" id="couponMsg"></div>
+            <div class="discount-line" id="discountLine" style="display:none;">
+                <span id="discountLabel"></span>
+                <span id="discountValue">-$0.00</span>
+            </div>
+            <div class="cart-modal-total">
+                <span id="cartModalTotalLabel"></span>
+                <span id="cartModalTotalValue">$0.00</span>
+            </div>
+            <button class="submit-order-btn" id="submitOrderBtn" type="button"></button>
+            <div class="tiktok-banner" id="tiktokBanner"></div>
+            <button class="tiktok-submit-btn" id="tiktokOpenBtn" type="button"></button>
+            <button class="join-community-btn" id="joinCommunityBtn" type="button"></button>
+            <button class="share-shop-btn" id="shareShopBtn" type="button"></button>
+            <button class="share-referral-btn" id="shareReferralBtn" type="button"></button>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="queueModal">
+        <div class="cart-modal">
+            <div class="cart-modal-header">
+                <h2 id="queueModalTitle"></h2>
+                <button class="modal-close" id="queueModalClose" type="button">×</button>
+            </div>
+            <p id="queueModalHint" style="margin:0;color:#666;font-size:14px;"></p>
+            <div class="queue-join-row">
+                <label id="partySizeLabel" for="partySizeInput"></label>
+                <input id="partySizeInput" type="number" min="1" max="50" value="2" />
+            </div>
+            <button class="queue-primary-btn" id="queueJoinBtn" type="button"></button>
+            <button class="queue-secondary-btn" id="queueRefreshBtn" type="button"></button>
+            <div id="queueResult" style="margin-top:12px;font-size:14px;line-height:1.45;color:#333;"></div>
+            <p id="queueStartHint" style="margin-top:10px;font-size:13px;color:#888;"></p>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="couponsModal">
+        <div class="cart-modal">
+            <div class="cart-modal-header">
+                <h2 id="couponsModalTitle"></h2>
+                <button class="modal-close" id="couponsModalClose" type="button">×</button>
+            </div>
+            <div id="couponsModalList"></div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="tiktokModal">
+        <div class="cart-modal">
+            <div class="cart-modal-header">
+                <h2 id="tiktokModalTitle"></h2>
+                <button class="modal-close" id="tiktokModalClose" type="button">×</button>
+            </div>
+            <p id="tiktokModalHint" style="margin:0;color:#666;font-size:14px;"></p>
+            <input class="tiktok-input" id="tiktokUrlInput" type="url" autocomplete="off" />
+            <div class="tiktok-modal-actions">
+                <button id="tiktokCancelBtn" type="button"></button>
+                <button id="tiktokSendBtn" type="button"></button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const tg = window.Telegram?.WebApp;
+        if (tg) {
+            tg.ready();
+            tg.expand();
+        }
+
+        const translations = {
+            en: {
+                shop_name_placeholder: "Shop",
+                menu: "Menu",
+                cart: "Cart",
+                cart_empty: "Your cart is empty",
+                add: "Add",
+                price: "Price",
+                remove: "Remove",
+                submit_order: "Submit Order",
+                language_switcher_label: "Language",
+                no_items: "No items yet",
+                total: "Total",
+                items: "Items",
+                order_success: "Order submitted! Waiting for confirmation.",
+                order_failed: "Could not submit order. Please try again.",
+                submitting: "Submitting...",
+                my_coupons: "My Coupons",
+                apply_coupon: "Apply",
+                coupon_placeholder: "Coupon code",
+                coupon_applied: "Coupon applied: -${amount}",
+                coupon_invalid: "Invalid coupon",
+                coupon_empty: "Enter a coupon code",
+                discount: "Discount",
+                no_coupons: "No unused coupons",
+                coupon_fixed: "${value} off (min ${min})",
+                coupon_percent: "{value}% off (min ${min})",
+                invite_friends: "Invite friends, get $1 off",
+                share_text: "Order with me and we both get $1 off!",
+                points_label: "Points: {points}",
+                redeem_points: "Redeem 100 pts → $1",
+                redeem_ok: "Coupon created: {code}",
+                redeem_fail: "Not enough points (need 100)",
+                featured_reviews: "Customer Reviews",
+                tiktok_banner: "Share a TikTok video with #{tag} and get a $5 coupon!",
+                tiktok_open: "Submit TikTok video",
+                tiktok_modal_title: "TikTok reward",
+                tiktok_modal_hint: "Paste your TikTok video URL (must include #{tag})",
+                tiktok_url_placeholder: "https://www.tiktok.com/...",
+                tiktok_send: "Submit",
+                tiktok_cancel: "Cancel",
+                tiktok_ok: "Submitted! Waiting for shop approval.",
+                tiktok_fail: "Could not submit. Check the URL and try again.",
+                tiktok_need_url: "Please paste a TikTok video URL",
+                share_shop: "Share this shop",
+                share_shop_text: "Order from {shop} on Telegram!",
+                festival_discount_msg: "{percent}% off for {name}!",
+                veg_only: "Show Vegetarian Only",
+                veg_only_off: "Show All Items",
+                queue_btn: "Queue",
+                queue_title: "Join Queue",
+                queue_hint: "Enter party size to get a queue number.",
+                party_size: "Party size",
+                queue_join: "Get queue number",
+                queue_refresh: "Refresh status",
+                queue_result: "Number #{number} · {status} · ~{wait} min wait",
+                queue_status_waiting: "waiting",
+                queue_status_ordering: "your turn — order now",
+                queue_status_ready: "table ready",
+                queue_start_hint: "Open the bot chat and tap /start so we can notify you.",
+                queue_join_fail: "Could not join queue.",
+                queue_need_user: "Open this Mini App inside Telegram.",
+                queue_card: "Queue #{number}: {status} (~{wait} min)",
+                queue_ordering_toast: "It's your turn! You can pre-order now.",
+                preorder_btn: "Pre-order now",
+                preorder_mode: "Pre-order (dine-in)",
+                join_community: "Join our Telegram community",
+                order_success_preorder: "Pre-order submitted! Waiting for confirmation.",
+            },
+            km: {
+                shop_name_placeholder: "ហាង",
+                menu: "ម៉ឺនុយ",
+                cart: "កន្ត្រក",
+                cart_empty: "កន្ត្រករបស់អ្នកទទេ",
+                add: "បន្ថែម",
+                price: "តម្លៃ",
+                remove: "លុប",
+                submit_order: "ដាក់បញ្ជាទិញ",
+                language_switcher_label: "ភាសា",
+                no_items: "មិនទាន់មានទំនិញ",
+                total: "សរុប",
+                items: "ទំនិញ",
+                order_success: "បានដាក់បញ្ជាទិញ! កំពុងរង់ចាំការបញ្ជាក់។",
+                order_failed: "មិនអាចដាក់បញ្ជាទិញបានទេ។ សូមព្យាយាមម្តងទៀត។",
+                submitting: "កំពុងដាក់បញ្ជាទិញ...",
+                tiktok_banner: "Share a TikTok video with #{tag} and get a $5 coupon!",
+                tiktok_open: "Submit TikTok video",
+                tiktok_modal_title: "TikTok reward",
+                tiktok_modal_hint: "Paste your TikTok video URL (must include #{tag})",
+                tiktok_url_placeholder: "https://www.tiktok.com/...",
+                tiktok_send: "Submit",
+                tiktok_cancel: "Cancel",
+                tiktok_ok: "Submitted! Waiting for shop approval.",
+                tiktok_fail: "Could not submit. Check the URL and try again.",
+                tiktok_need_url: "Please paste a TikTok video URL",
+                share_shop: "Share this shop",
+                share_shop_text: "Order from {shop} on Telegram!",
+                festival_discount_msg: "{percent}% off for {name}!",
+                veg_only: "Show Vegetarian Only",
+                veg_only_off: "Show All Items",
+                queue_btn: "Queue",
+                queue_title: "Join Queue",
+                queue_hint: "Enter party size to get a queue number.",
+                party_size: "Party size",
+                queue_join: "Get queue number",
+                queue_refresh: "Refresh status",
+                queue_result: "Number #{number} · {status} · ~{wait} min wait",
+                queue_status_waiting: "waiting",
+                queue_status_ordering: "your turn — order now",
+                queue_status_ready: "table ready",
+                queue_start_hint: "Open the bot chat and tap /start so we can notify you.",
+                queue_join_fail: "Could not join queue.",
+                queue_need_user: "Open this Mini App inside Telegram.",
+                queue_card: "Queue #{number}: {status} (~{wait} min)",
+                queue_ordering_toast: "It's your turn! You can pre-order now.",
+                preorder_btn: "Pre-order now",
+                preorder_mode: "Pre-order (dine-in)",
+                join_community: "Join our Telegram community",
+                order_success_preorder: "Pre-order submitted! Waiting for confirmation.",
+            },
+            zh: {
+                shop_name_placeholder: "店铺",
+                menu: "菜单",
+                cart: "购物车",
+                cart_empty: "购物车是空的",
+                add: "添加",
+                price: "价格",
+                remove: "移除",
+                submit_order: "提交订单",
+                language_switcher_label: "语言",
+                no_items: "暂无商品",
+                total: "合计",
+                items: "商品",
+                order_success: "订单已提交！等待确认。",
+                order_failed: "提交失败，请重试。",
+                submitting: "提交中...",
+                my_coupons: "我的优惠券",
+                apply_coupon: "使用",
+                coupon_placeholder: "优惠码",
+                coupon_applied: "已使用优惠券：-${amount}",
+                coupon_invalid: "优惠券无效",
+                coupon_empty: "请输入优惠码",
+                discount: "优惠",
+                no_coupons: "没有未使用的优惠券",
+                coupon_fixed: "减 ${value}（满 ${min}）",
+                coupon_percent: "{value}% 折扣（满 ${min}）",
+                invite_friends: "邀请好友，各得 $1 优惠",
+                share_text: "和我一起下单，我们都能减 $1！",
+                points_label: "积分：{points}",
+                redeem_points: "100 积分兑换 $1",
+                redeem_ok: "优惠券已生成：{code}",
+                redeem_fail: "积分不足（需要 100）",
+                featured_reviews: "顾客评价",
+                tiktok_banner: "分享带 #{tag} 的 TikTok 视频，可获 $5 优惠券！",
+                tiktok_open: "提交 TikTok 视频",
+                tiktok_modal_title: "TikTok 奖励",
+                tiktok_modal_hint: "粘贴 TikTok 视频链接（需包含 #{tag}）",
+                tiktok_url_placeholder: "https://www.tiktok.com/...",
+                tiktok_send: "提交",
+                tiktok_cancel: "取消",
+                tiktok_ok: "已提交！等待店铺审核。",
+                tiktok_fail: "提交失败，请检查链接后重试。",
+                tiktok_need_url: "请粘贴 TikTok 视频链接",
+                share_shop: "分享本店",
+                share_shop_text: "来 Telegram 点单：{shop}",
+                festival_discount_msg: "{name}特惠：立减 {percent}%！",
+                veg_only: "仅看素食",
+                veg_only_off: "显示全部菜品",
+                queue_btn: "排队",
+                queue_title: "取号排队",
+                queue_hint: "输入用餐人数以获取排队号。",
+                party_size: "人数",
+                queue_join: "取号",
+                queue_refresh: "刷新状态",
+                queue_result: "号码 #{number} · {status} · 约 {wait} 分钟",
+                queue_status_waiting: "等待中",
+                queue_status_ordering: "轮到你了 — 可以点餐",
+                queue_status_ready: "已叫号",
+                queue_start_hint: "请打开机器人对话并发送 /start，以便接收通知。",
+                queue_join_fail: "取号失败。",
+                queue_need_user: "请在 Telegram 内打开小程序。",
+                queue_card: "排队 #{number}：{status}（约 {wait} 分钟）",
+                queue_ordering_toast: "轮到你了！可以预点餐。",
+                preorder_btn: "立即预点餐",
+                preorder_mode: "预点餐（堂食）",
+                join_community: "加入我们的 Telegram 社群",
+                order_success_preorder: "预点餐已提交！等待确认。",
+            },
+        };
+
+        let currentLang = "en";
+        let shopData = null;
+        let menuData = { categories: [] };
+        let cart = []; // { id, name_en, name_km, name_zh, price, quantity }
+        let appliedCoupon = null; // { code, discount }
+        let botUsername = "";
+        let userPoints = 0;
+        let lastOrderId = null;
+        let vegetarianOnly = false;
+        let activeQueue = null; // { queue_id, queue_number, status, estimated_wait, party_size }
+        let preorderMode = false;
+        let queuePollTimer = null;
+        let lastQueueStatus = null;
+
+        function detectLanguageFromTelegram() {
+            const code = (tg?.initDataUnsafe?.user?.language_code || "").toLowerCase();
+            if (code.startsWith("km")) return "km";
+            if (code.startsWith("zh")) return "zh";
+            return "en";
+        }
+
+        function initLanguage() {
+            const saved = localStorage.getItem("lang");
+            if (saved && translations[saved]) {
+                currentLang = saved;
+            } else {
+                currentLang = detectLanguageFromTelegram();
+                localStorage.setItem("lang", currentLang);
+            }
+            document.documentElement.lang = currentLang === "zh" ? "zh-Hans" : currentLang;
+        }
+
+        function t(key, vars) {
+            let text = translations[currentLang]?.[key] ?? translations.en[key] ?? key;
+            if (vars) {
+                Object.keys(vars).forEach((k) => {
+                    text = text.replaceAll(`{${k}}`, String(vars[k]));
+                    text = text.replaceAll(`\${${k}}`, String(vars[k]));
+                });
+            }
+            return text;
+        }
+
+        function currentUserId() {
+            return tg?.initDataUnsafe?.user?.id || null;
+        }
+
+        function payableTotal() {
+            const sub = cartTotal();
+            const discount = appliedCoupon ? Number(appliedCoupon.discount) || 0 : 0;
+            return Math.max(0, sub - discount);
+        }
+
+        function clearCoupon() {
+            appliedCoupon = null;
+            const msg = document.getElementById("couponMsg");
+            if (msg) {
+                msg.textContent = "";
+                msg.className = "coupon-msg";
+            }
+        }
+
+        function getShopName() {
+            if (!shopData) return t("shop_name_placeholder");
+            return shopData[`name_${currentLang}`] || shopData.name_en || t("shop_name_placeholder");
+        }
+
+        function getShopHashtag() {
+            const raw = (shopData?.name_en || getShopName() || "shop").toString();
+            const tag = raw.replace(/[^\w\u4e00-\u9fff\u1780-\u17ff]+/g, "");
+            return tag || "shop";
+        }
+
+        function updatePostOrderPromoUI() {
+            const tag = getShopHashtag();
+            const banner = document.getElementById("tiktokBanner");
+            banner.textContent = t("tiktok_banner", { tag });
+            document.getElementById("tiktokOpenBtn").textContent = t("tiktok_open");
+            document.getElementById("shareShopBtn").textContent = t("share_shop");
+            document.getElementById("shareReferralBtn").textContent = t("invite_friends");
+            document.getElementById("tiktokModalTitle").textContent = t("tiktok_modal_title");
+            document.getElementById("tiktokModalHint").textContent = t("tiktok_modal_hint", { tag });
+            document.getElementById("tiktokUrlInput").placeholder = t("tiktok_url_placeholder");
+            document.getElementById("tiktokSendBtn").textContent = t("tiktok_send");
+            document.getElementById("tiktokCancelBtn").textContent = t("tiktok_cancel");
+        }
+
+        function showPostOrderActions() {
+            updatePostOrderPromoUI();
+            document.getElementById("tiktokBanner").classList.add("show");
+            document.getElementById("tiktokOpenBtn").classList.add("show");
+            document.getElementById("shareShopBtn").classList.add("show");
+            document.getElementById("shareReferralBtn").classList.add("show");
+            const invite = (shopData?.group_invite_link || "").trim();
+            const communityBtn = document.getElementById("joinCommunityBtn");
+            communityBtn.textContent = t("join_community");
+            if (invite) communityBtn.classList.add("show");
+            else communityBtn.classList.remove("show");
+        }
+
+        function joinCommunity() {
+            const invite = (shopData?.group_invite_link || "").trim();
+            if (!invite) return;
+            if (tg?.openTelegramLink) tg.openTelegramLink(invite);
+            else window.open(invite, "_blank");
+        }
+
+        function queueStatusLabel(status) {
+            if (status === "ordering") return t("queue_status_ordering");
+            if (status === "ready") return t("queue_status_ready");
+            return t("queue_status_waiting");
+        }
+
+        function renderQueueUI() {
+            document.getElementById("queueBtn").textContent = t("queue_btn");
+            document.getElementById("queueModalTitle").textContent = t("queue_title");
+            document.getElementById("queueModalHint").textContent = t("queue_hint");
+            document.getElementById("partySizeLabel").textContent = t("party_size");
+            document.getElementById("queueJoinBtn").textContent = t("queue_join");
+            document.getElementById("queueRefreshBtn").textContent = t("queue_refresh");
+            document.getElementById("queueStartHint").textContent = t("queue_start_hint");
+            document.getElementById("preorderBtn").textContent = t("preorder_btn");
+            document.getElementById("joinCommunityBtn").textContent = t("join_community");
+
+            const card = document.getElementById("queueStatusCard");
+            const preorderBtn = document.getElementById("preorderBtn");
+            if (!activeQueue) {
+                card.classList.remove("show", "ordering");
+                preorderBtn.classList.remove("show");
+                document.getElementById("queueResult").textContent = "";
+                return;
+            }
+            const statusText = queueStatusLabel(activeQueue.status);
+            const wait = Number(activeQueue.estimated_wait) || 0;
+            card.textContent = t("queue_card", {
+                number: activeQueue.queue_number,
+                status: statusText,
+                wait,
+            });
+            card.classList.add("show");
+            card.classList.toggle("ordering", activeQueue.status === "ordering");
+            document.getElementById("queueResult").textContent = t("queue_result", {
+                number: activeQueue.queue_number,
+                status: statusText,
+                wait,
+            });
+            if (activeQueue.status === "ordering") {
+                preorderBtn.classList.add("show");
+            } else {
+                preorderBtn.classList.remove("show");
+            }
+        }
+
+        function applyQueueEntry(entry) {
+            if (!entry) {
+                activeQueue = null;
+                lastQueueStatus = null;
+                renderQueueUI();
+                return;
+            }
+            const prev = lastQueueStatus;
+            activeQueue = {
+                queue_id: entry.queue_id || entry.id,
+                queue_number: entry.queue_number,
+                party_size: entry.party_size,
+                status: entry.status,
+                estimated_wait: entry.estimated_wait || 0,
+            };
+            if (prev !== "ordering" && activeQueue.status === "ordering") {
+                showToast(t("queue_ordering_toast"));
+            }
+            lastQueueStatus = activeQueue.status;
+            renderQueueUI();
+        }
+
+        async function refreshQueueStatus() {
+            const userId = currentUserId();
+            if (!userId) return;
+            try {
+                const res = await fetch(`/api/queue/status?user_id=${userId}`);
+                const data = await res.json();
+                if (!data.ok) return;
+                if (!data.in_queue) {
+                    applyQueueEntry(null);
+                    return;
+                }
+                applyQueueEntry(data.entry);
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function startQueuePolling() {
+            if (queuePollTimer) return;
+            queuePollTimer = setInterval(refreshQueueStatus, 8000);
+        }
+
+        function openQueueModal() {
+            renderQueueUI();
+            document.getElementById("queueModal").classList.add("open");
+            refreshQueueStatus();
+            startQueuePolling();
+        }
+
+        function closeQueueModal() {
+            document.getElementById("queueModal").classList.remove("open");
+        }
+
+        async function joinQueue() {
+            const userId = currentUserId();
+            if (!userId) {
+                showToast(t("queue_need_user"));
+                return;
+            }
+            const partySize = parseInt(document.getElementById("partySizeInput").value, 10) || 1;
+            try {
+                const res = await fetch("/api/queue/join", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        party_size: partySize,
+                        shop_id: 1,
+                    }),
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.error || "fail");
+                applyQueueEntry(data);
+                startQueuePolling();
+            } catch (err) {
+                console.error(err);
+                showToast(t("queue_join_fail"));
+            }
+        }
+
+        function enablePreorderMode() {
+            preorderMode = true;
+            openCartModal();
+            renderCartModal();
+            showToast(t("preorder_mode"));
+        }
+
+        function openTikTokModal() {
+            updatePostOrderPromoUI();
+            document.getElementById("tiktokUrlInput").value = "";
+            document.getElementById("tiktokModal").classList.add("open");
+        }
+
+        function closeTikTokModal() {
+            document.getElementById("tiktokModal").classList.remove("open");
+        }
+
+        async function submitTikTok() {
+            const videoUrl = document.getElementById("tiktokUrlInput").value.trim();
+            const userId = currentUserId();
+            if (!videoUrl) {
+                showToast(t("tiktok_need_url"));
+                return;
+            }
+            if (!userId) {
+                showToast(t("tiktok_fail"));
+                return;
+            }
+            try {
+                const res = await fetch("/api/submit_tiktok", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        video_url: videoUrl,
+                        order_id: lastOrderId,
+                        user_id: userId,
+                    }),
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.error || "fail");
+                closeTikTokModal();
+                showToast(t("tiktok_ok"));
+            } catch (err) {
+                console.error(err);
+                showToast(t("tiktok_fail"));
+            }
+        }
+
+        function shareShop() {
+            if (!botUsername) {
+                showToast(t("order_failed"));
+                return;
+            }
+            const link = `https://t.me/${botUsername}?startapp=shop_1`;
+            const shareUrl =
+                `https://t.me/share/url?url=${encodeURIComponent(link)}` +
+                `&text=${encodeURIComponent(t("share_shop_text", { shop: getShopName() }))}`;
+            if (tg?.openTelegramLink) {
+                tg.openTelegramLink(shareUrl);
+            } else {
+                window.open(shareUrl, "_blank");
+            }
+        }
+
+        function getItemName(item) {
+            return item[`name_${currentLang}`] || item.name_en || "";
+        }
+
+        function getCategoryName(category) {
+            if (!category?.name) return "";
+            return category.name[currentLang] || category.name.en || "";
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById("toast");
+            toast.textContent = message;
+            toast.classList.add("show");
+            setTimeout(() => toast.classList.remove("show"), 2500);
+        }
+
+        function applyTheme() {
+            if (!shopData) return;
+
+            const primary = shopData.primary_color || "#FF5722";
+            const bg = shopData.background_color || "#FFFFFF";
+            const bgImage = (shopData.background_image_url || "").trim();
+
+            document.documentElement.style.setProperty("--primary", primary);
+            document.documentElement.style.setProperty("--bg", bg);
+
+            if (bgImage) {
+                document.documentElement.style.setProperty("--bg-image", `url("${bgImage.replace(/"/g, '\\"')}")`);
+                document.documentElement.style.setProperty("--overlay", "rgba(255, 255, 255, 0.55)");
+                document.body.classList.add("has-bg-image");
+            } else {
+                document.documentElement.style.setProperty("--bg-image", "none");
+                document.documentElement.style.setProperty("--overlay", "rgba(255, 255, 255, 0)");
+                document.body.classList.remove("has-bg-image");
+            }
+
+            if (tg) tg.setHeaderColor(primary);
+
+            const logo = document.getElementById("shopLogo");
+            if (shopData.logo_url) {
+                logo.src = shopData.logo_url;
+                logo.style.display = "block";
+            } else {
+                logo.style.display = "none";
+            }
+        }
+
+        function setLanguage(lang) {
+            if (!translations[lang]) return;
+            currentLang = lang;
+            localStorage.setItem("lang", lang);
+            document.documentElement.lang = lang === "zh" ? "zh-Hans" : lang;
+            render();
+        }
+
+        function cartQuantity() {
+            return cart.reduce((sum, item) => sum + item.quantity, 0);
+        }
+
+        function cartTotal() {
+            return cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+        }
+
+        function festivalDiscountPercent() {
+            return Number(menuData.festival_discount) || 0;
+        }
+
+        function getFestivalName() {
+            const names = menuData.festival_name;
+            if (!names) return "";
+            if (typeof names === "string") return names;
+            return names[currentLang] || names.en || "";
+        }
+
+        function displayPrice(price) {
+            const base = Number(price) || 0;
+            const pct = festivalDiscountPercent();
+            if (pct <= 0) return base;
+            return Math.round(base * (100 - pct)) / 100;
+        }
+
+        function formatPriceHtml(originalPrice) {
+            const base = Number(originalPrice) || 0;
+            const sale = displayPrice(base);
+            if (festivalDiscountPercent() > 0 && sale < base) {
+                return (
+                    `<span class="price-old">$${base.toFixed(2)}</span>` +
+                    `<span class="price-sale">$${sale.toFixed(2)}</span>`
+                );
+            }
+            return `$${base.toFixed(2)}`;
+        }
+
+        function updateFestivalUI() {
+            const banner = document.getElementById("festivalBanner");
+            const vegWrap = document.getElementById("vegToggleWrap");
+            const vegBtn = document.getElementById("vegToggleBtn");
+            const fest = menuData.festival;
+            const pct = festivalDiscountPercent();
+            const name = getFestivalName();
+
+            if (fest && name && pct > 0) {
+                document.getElementById("festivalBannerTitle").textContent = name;
+                document.getElementById("festivalBannerMsg").textContent = t(
+                    "festival_discount_msg",
+                    { name, percent: pct }
+                );
+                banner.classList.add("show");
+            } else {
+                banner.classList.remove("show");
+            }
+
+            const vegFest = Number(menuData.festival_is_vegetarian) === 1;
+            if (vegFest) {
+                vegWrap.classList.add("show");
+                vegBtn.textContent = vegetarianOnly ? t("veg_only_off") : t("veg_only");
+                vegBtn.classList.toggle("active", vegetarianOnly);
+            } else {
+                vegetarianOnly = false;
+                vegWrap.classList.remove("show");
+                vegBtn.classList.remove("active");
+            }
+        }
+
+        function findMenuItem(itemId) {
+            for (const category of menuData.categories || []) {
+                const found = (category.items || []).find((item) => item.id === itemId);
+                if (found) return found;
+            }
+            return null;
+        }
+
+        function addToCart(itemId) {
+            const item = findMenuItem(itemId);
+            if (!item) return;
+
+            const existing = cart.find((c) => c.id === itemId);
+            if (existing) {
+                existing.quantity += 1;
+            } else {
+                cart.push({
+                    id: item.id,
+                    name_en: item.name_en,
+                    name_km: item.name_km,
+                    name_zh: item.name_zh,
+                    price: displayPrice(item.price),
+                    quantity: 1,
+                });
+            }
+            clearCoupon();
+            render();
+        }
+
+        function changeQty(itemId, delta) {
+            const item = cart.find((c) => c.id === itemId);
+            if (!item) return;
+            item.quantity += delta;
+            if (item.quantity <= 0) {
+                cart = cart.filter((c) => c.id !== itemId);
+            }
+            clearCoupon();
+            render();
+        }
+
+        function removeFromCart(itemId) {
+            cart = cart.filter((c) => c.id !== itemId);
+            clearCoupon();
+            render();
+        }
+
+        function openCartModal() {
+            document.getElementById("cartModal").classList.add("open");
+            renderCartModal();
+        }
+
+        function closeCartModal() {
+            document.getElementById("cartModal").classList.remove("open");
+        }
+
+        function renderMenu() {
+            const menuList = document.getElementById("menuList");
+            menuList.innerHTML = "";
+            updateFestivalUI();
+
+            const categories = menuData.categories || [];
+            const hasItems = categories.some((cat) => {
+                const items = (cat.items || []).filter((item) => {
+                    if (!vegetarianOnly) return true;
+                    return Number(item.is_vegetarian) === 1;
+                });
+                return items.length > 0;
+            });
+
+            if (!hasItems) {
+                const empty = document.createElement("div");
+                empty.className = "menu-empty";
+                empty.textContent = t("no_items");
+                menuList.appendChild(empty);
+                return;
+            }
+
+            categories.forEach((category) => {
+                const items = (category.items || []).filter((item) => {
+                    if (!vegetarianOnly) return true;
+                    return Number(item.is_vegetarian) === 1;
+                });
+                if (!items.length) return;
+
+                const block = document.createElement("div");
+                block.className = "category-block";
+
+                const title = document.createElement("div");
+                title.className = "category-title";
+                title.textContent = getCategoryName(category);
+                block.appendChild(title);
+
+                items.forEach((item) => {
+                    const row = document.createElement("div");
+                    row.className = "menu-item";
+
+                    const thumb = document.createElement("img");
+                    thumb.className = "menu-item-thumb";
+                    thumb.alt = getItemName(item);
+                    thumb.src = item.image_url || (
+                        "data:image/svg+xml," +
+                        encodeURIComponent(
+                            `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56">` +
+                            `<rect width="56" height="56" fill="#e8e8e8"/>` +
+                            `<text x="28" y="32" text-anchor="middle" fill="#999" font-size="10">N/A</text>` +
+                            `</svg>`
+                        )
+                    );
+
+                    const info = document.createElement("div");
+                    info.className = "menu-item-info";
+                    info.innerHTML =
+                        `<div class="menu-item-name">${getItemName(item)}</div>` +
+                        `<div class="menu-item-price">${t("price")}: ${formatPriceHtml(item.price)}</div>`;
+
+                    const addBtn = document.createElement("button");
+                    addBtn.className = "btn-add";
+                    addBtn.type = "button";
+                    addBtn.title = t("add");
+                    addBtn.textContent = "+";
+                    addBtn.addEventListener("click", () => addToCart(item.id));
+
+                    row.appendChild(thumb);
+                    row.appendChild(info);
+                    row.appendChild(addBtn);
+                    block.appendChild(row);
+                });
+
+                menuList.appendChild(block);
+            });
+        }
+
+        function renderCartBar() {
+            const bar = document.getElementById("cartBar");
+            const qty = cartQuantity();
+            if (qty <= 0) {
+                bar.classList.remove("visible");
+                return;
+            }
+            bar.classList.add("visible");
+            document.getElementById("cartBarQty").textContent = `${t("cart")}: ${qty} ${t("items")}`;
+            document.getElementById("cartBarTotal").textContent = `$${cartTotal().toFixed(2)}`;
+        }
+
+        function renderCartModal() {
+            document.getElementById("cartModalTitle").textContent = t("cart");
+            document.getElementById("cartModalTotalLabel").textContent = t("total");
+            document.getElementById("cartModalTotalValue").textContent = `$${payableTotal().toFixed(2)}`;
+            document.getElementById("submitOrderBtn").textContent = preorderMode
+                ? t("preorder_mode")
+                : t("submit_order");
+            document.getElementById("submitOrderBtn").disabled = cart.length === 0;
+            document.getElementById("applyCouponBtn").textContent = t("apply_coupon");
+            document.getElementById("couponInput").placeholder = t("coupon_placeholder");
+            document.getElementById("discountLabel").textContent = t("discount");
+            document.getElementById("shareReferralBtn").textContent = t("invite_friends");
+
+            const discountLine = document.getElementById("discountLine");
+            if (appliedCoupon && appliedCoupon.discount > 0) {
+                discountLine.style.display = "flex";
+                document.getElementById("discountValue").textContent =
+                    `-$${Number(appliedCoupon.discount).toFixed(2)}`;
+            } else {
+                discountLine.style.display = "none";
+            }
+
+            const list = document.getElementById("cartModalList");
+            list.innerHTML = "";
+
+            if (!cart.length) {
+                const empty = document.createElement("div");
+                empty.className = "menu-empty";
+                empty.textContent = t("cart_empty");
+                list.appendChild(empty);
+                return;
+            }
+
+            cart.forEach((item) => {
+                const row = document.createElement("div");
+                row.className = "cart-row";
+
+                const left = document.createElement("div");
+                left.innerHTML =
+                    `<div class="cart-row-name">${getItemName(item)}</div>` +
+                    `<div class="cart-row-price">$${(item.price * item.quantity).toFixed(2)}</div>`;
+
+                const controls = document.createElement("div");
+                controls.className = "cart-controls";
+
+                const minus = document.createElement("button");
+                minus.className = "qty-btn";
+                minus.type = "button";
+                minus.textContent = "−";
+                minus.addEventListener("click", () => changeQty(item.id, -1));
+
+                const qty = document.createElement("span");
+                qty.className = "qty-value";
+                qty.textContent = String(item.quantity);
+
+                const plus = document.createElement("button");
+                plus.className = "qty-btn";
+                plus.type = "button";
+                plus.textContent = "+";
+                plus.addEventListener("click", () => changeQty(item.id, 1));
+
+                const remove = document.createElement("button");
+                remove.className = "remove-btn";
+                remove.type = "button";
+                remove.textContent = t("remove");
+                remove.addEventListener("click", () => removeFromCart(item.id));
+
+                controls.appendChild(minus);
+                controls.appendChild(qty);
+                controls.appendChild(plus);
+                controls.appendChild(remove);
+
+                row.appendChild(left);
+                row.appendChild(controls);
+                list.appendChild(row);
+            });
+        }
+
+        async function applyCoupon() {
+            const input = document.getElementById("couponInput");
+            const msg = document.getElementById("couponMsg");
+            const code = (input.value || "").trim();
+            const userId = currentUserId();
+            if (!code) {
+                msg.textContent = t("coupon_empty");
+                msg.className = "coupon-msg err";
+                return;
+            }
+            if (!userId) {
+                msg.textContent = t("coupon_invalid");
+                msg.className = "coupon-msg err";
+                return;
+            }
+            try {
+                const params = new URLSearchParams({
+                    code,
+                    user_id: String(userId),
+                    total: String(cartTotal()),
+                });
+                const res = await fetch(`/api/validate_coupon?${params}`);
+                const data = await res.json();
+                if (!data.valid) {
+                    clearCoupon();
+                    msg.textContent = t("coupon_invalid");
+                    msg.className = "coupon-msg err";
+                    renderCartModal();
+                    return;
+                }
+                appliedCoupon = { code: code.toUpperCase(), discount: data.discount };
+                msg.textContent = t("coupon_applied", {
+                    amount: `$${Number(data.discount).toFixed(2)}`,
+                });
+                msg.className = "coupon-msg ok";
+                renderCartModal();
+            } catch (err) {
+                console.error(err);
+                msg.textContent = t("coupon_invalid");
+                msg.className = "coupon-msg err";
+            }
+        }
+
+        async function openCouponsModal() {
+            document.getElementById("couponsModalTitle").textContent = t("my_coupons");
+            const list = document.getElementById("couponsModalList");
+            list.innerHTML = "";
+            const userId = currentUserId();
+            if (!userId) {
+                list.textContent = t("no_coupons");
+                document.getElementById("couponsModal").classList.add("open");
+                return;
+            }
+            try {
+                const res = await fetch(`/api/mycoupons?user_id=${userId}`);
+                const data = await res.json();
+                const coupons = data.coupons || [];
+                if (!coupons.length) {
+                    list.textContent = t("no_coupons");
+                } else {
+                    coupons.forEach((c) => {
+                        const row = document.createElement("div");
+                        row.className = "coupon-item";
+                        const detail =
+                            c.type === "percent"
+                                ? t("coupon_percent", {
+                                      value: Number(c.value).toFixed(0),
+                                      min: Number(c.min_order || 0).toFixed(2),
+                                  })
+                                : t("coupon_fixed", {
+                                      value: Number(c.value).toFixed(2),
+                                      min: Number(c.min_order || 0).toFixed(2),
+                                  });
+                        row.innerHTML =
+                            `<div class="coupon-code">${c.code}</div>` +
+                            `<div>${detail}</div>`;
+                        row.style.cursor = "pointer";
+                        row.addEventListener("click", () => {
+                            document.getElementById("couponInput").value = c.code;
+                            document.getElementById("couponsModal").classList.remove("open");
+                            openCartModal();
+                            applyCoupon();
+                        });
+                        list.appendChild(row);
+                    });
+                }
+            } catch (err) {
+                console.error(err);
+                list.textContent = t("no_coupons");
+            }
+            document.getElementById("couponsModal").classList.add("open");
+        }
+
+        function shareReferral() {
+            const userId = currentUserId();
+            if (!userId || !botUsername) {
+                showToast(t("order_failed"));
+                return;
+            }
+            const link = `https://t.me/${botUsername}?start=ref_${userId}`;
+            const shareUrl =
+                `https://t.me/share/url?url=${encodeURIComponent(link)}` +
+                `&text=${encodeURIComponent(t("share_text"))}`;
+            if (tg?.openTelegramLink) {
+                tg.openTelegramLink(shareUrl);
+            } else {
+                window.open(shareUrl, "_blank");
+            }
+        }
+
+        function renderPoints() {
+            document.getElementById("pointsText").textContent = t("points_label", {
+                points: userPoints,
+            });
+            document.getElementById("redeemBtn").textContent = t("redeem_points");
+        }
+
+        function renderFeaturedReviews(reviews) {
+            const section = document.getElementById("reviewsSection");
+            const track = document.getElementById("reviewsTrack");
+            document.getElementById("reviewsTitle").textContent = t("featured_reviews");
+            track.innerHTML = "";
+            if (!reviews || !reviews.length) {
+                section.style.display = "none";
+                return;
+            }
+            section.style.display = "block";
+            reviews.forEach((r) => {
+                const card = document.createElement("div");
+                card.className = "review-card";
+                const stars = "★".repeat(Number(r.rating) || 0) + "☆".repeat(5 - (Number(r.rating) || 0));
+                let html =
+                    `<div class="review-stars">${stars}</div>` +
+                    `<div class="review-name">${r.first_name || "Guest"}</div>` +
+                    `<div class="review-comment">${r.comment || ""}</div>`;
+                if (r.image_url) {
+                    html += `<img src="${r.image_url}" alt="">`;
+                }
+                card.innerHTML = html;
+                track.appendChild(card);
+            });
+        }
+
+        async function loadPoints() {
+            const userId = currentUserId();
+            if (!userId) {
+                userPoints = 0;
+                renderPoints();
+                return;
+            }
+            try {
+                const res = await fetch(`/api/user/points?user_id=${userId}`);
+                const data = await res.json();
+                userPoints = data.ok ? Number(data.points) || 0 : 0;
+            } catch (err) {
+                console.error(err);
+                userPoints = 0;
+            }
+            renderPoints();
+        }
+
+        async function loadFeaturedReviews() {
+            try {
+                const res = await fetch("/api/shop/1/reviews/featured");
+                const data = await res.json();
+                renderFeaturedReviews(data.reviews || []);
+            } catch (err) {
+                console.error(err);
+                renderFeaturedReviews([]);
+            }
+        }
+
+        async function redeemPoints() {
+            const userId = currentUserId();
+            if (!userId) {
+                showToast(t("redeem_fail"));
+                return;
+            }
+            try {
+                const res = await fetch("/api/redeem_points", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ user_id: userId }),
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) {
+                    showToast(t("redeem_fail"));
+                    return;
+                }
+                userPoints = Number(data.points) || 0;
+                renderPoints();
+                showToast(t("redeem_ok", { code: data.coupon_code }));
+                document.getElementById("couponInput").value = data.coupon_code;
+            } catch (err) {
+                console.error(err);
+                showToast(t("redeem_fail"));
+            }
+        }
+
+        function render() {
+            document.querySelectorAll(".lang-btn").forEach((btn) => {
+                btn.classList.toggle("active", btn.dataset.lang === currentLang);
+            });
+            document.getElementById("langLabel").textContent = t("language_switcher_label");
+            document.getElementById("shopName").textContent = getShopName();
+            document.getElementById("menuTitle").textContent = t("menu");
+            document.getElementById("myCouponsBtn").textContent = t("my_coupons");
+            document.getElementById("reviewsTitle").textContent = t("featured_reviews");
+            updatePostOrderPromoUI();
+            renderQueueUI();
+            renderPoints();
+            renderMenu();
+            renderCartBar();
+            if (document.getElementById("cartModal").classList.contains("open")) {
+                renderCartModal();
+            }
+        }
+
+        async function submitOrder() {
+            if (!cart.length) return;
+
+            const btn = document.getElementById("submitOrderBtn");
+            btn.disabled = true;
+            btn.textContent = t("submitting");
+
+            const user = tg?.initDataUnsafe?.user || null;
+            const isPreorder = Boolean(preorderMode && activeQueue?.queue_id);
+            const payload = {
+                shop_id: 1,
+                items: cart.map((item) => ({
+                    id: item.id,
+                    name_en: item.name_en,
+                    name_km: item.name_km,
+                    name_zh: item.name_zh,
+                    price: item.price,
+                    quantity: item.quantity,
+                })),
+                total: cartTotal(),
+                language: currentLang,
+                user,
+                customer_id: user?.id || null,
+                customer_name: user
+                    ? [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || null
+                    : null,
+                coupon_code: appliedCoupon?.code || null,
+                order_type: isPreorder ? "dinein" : "takeaway",
+                queue_id: isPreorder ? activeQueue.queue_id : null,
+            };
+
+            try {
+                const res = await fetch("/api/order", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.error || "failed");
+
+                cart = [];
+                clearCoupon();
+                lastOrderId = data.order_id || null;
+                preorderMode = false;
+                document.getElementById("couponInput").value = "";
+                showPostOrderActions();
+                render();
+                showToast(isPreorder ? t("order_success_preorder") : t("order_success"));
+                btn.disabled = false;
+                btn.textContent = t("submit_order");
+            } catch (err) {
+                console.error(err);
+                showToast(t("order_failed"));
+                btn.disabled = false;
+                btn.textContent = t("submit_order");
+            }
+        }
+
+        document.querySelectorAll(".lang-btn").forEach((btn) => {
+            btn.addEventListener("click", () => setLanguage(btn.dataset.lang));
+        });
+        document.getElementById("cartBar").addEventListener("click", openCartModal);
+        document.getElementById("cartModalClose").addEventListener("click", closeCartModal);
+        document.getElementById("cartModal").addEventListener("click", (e) => {
+            if (e.target.id === "cartModal") closeCartModal();
+        });
+        document.getElementById("submitOrderBtn").addEventListener("click", submitOrder);
+        document.getElementById("applyCouponBtn").addEventListener("click", applyCoupon);
+        document.getElementById("myCouponsBtn").addEventListener("click", openCouponsModal);
+        document.getElementById("couponsModalClose").addEventListener("click", () => {
+            document.getElementById("couponsModal").classList.remove("open");
+        });
+        document.getElementById("couponsModal").addEventListener("click", (e) => {
+            if (e.target.id === "couponsModal") {
+                document.getElementById("couponsModal").classList.remove("open");
+            }
+        });
+        document.getElementById("shareReferralBtn").addEventListener("click", shareReferral);
+        document.getElementById("shareShopBtn").addEventListener("click", shareShop);
+        document.getElementById("tiktokOpenBtn").addEventListener("click", openTikTokModal);
+        document.getElementById("tiktokModalClose").addEventListener("click", closeTikTokModal);
+        document.getElementById("tiktokCancelBtn").addEventListener("click", closeTikTokModal);
+        document.getElementById("tiktokSendBtn").addEventListener("click", submitTikTok);
+        document.getElementById("tiktokModal").addEventListener("click", (e) => {
+            if (e.target.id === "tiktokModal") closeTikTokModal();
+        });
+        document.getElementById("redeemBtn").addEventListener("click", redeemPoints);
+        document.getElementById("vegToggleBtn").addEventListener("click", () => {
+            vegetarianOnly = !vegetarianOnly;
+            renderMenu();
+        });
+        document.getElementById("queueBtn").addEventListener("click", openQueueModal);
+        document.getElementById("queueModalClose").addEventListener("click", closeQueueModal);
+        document.getElementById("queueModal").addEventListener("click", (e) => {
+            if (e.target.id === "queueModal") closeQueueModal();
+        });
+        document.getElementById("queueJoinBtn").addEventListener("click", joinQueue);
+        document.getElementById("queueRefreshBtn").addEventListener("click", refreshQueueStatus);
+        document.getElementById("preorderBtn").addEventListener("click", enablePreorderMode);
+        document.getElementById("joinCommunityBtn").addEventListener("click", joinCommunity);
+
+        async function loadMenu() {
+            try {
+                const res = await fetch("/api/menu/1");
+                if (!res.ok) throw new Error("Failed to load menu");
+                menuData = await res.json();
+            } catch (err) {
+                console.error(err);
+                menuData = {
+                    categories: [],
+                    festival: null,
+                    festival_discount: 0,
+                    festival_name: null,
+                    festival_is_vegetarian: 0,
+                };
+            }
+            updateFestivalUI();
+        }
+
+        async function handleStartReferral() {
+            const userId = currentUserId();
+            if (!userId) return;
+
+            // Telegram Mini App start_param: ref_{id}
+            const startParam =
+                tg?.initDataUnsafe?.start_param ||
+                new URLSearchParams(window.location.search).get("tgWebAppStartParam") ||
+                "";
+            if (!startParam.startsWith("ref_")) return;
+            const referrerId = parseInt(startParam.split("_")[1], 10);
+            if (!referrerId || referrerId === userId) return;
+            try {
+                await fetch("/api/apply_referral", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        referrer_id: referrerId,
+                        referred_id: userId,
+                    }),
+                });
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function loadBotInfo() {
+            try {
+                const res = await fetch("/api/bot_info");
+                const data = await res.json();
+                botUsername = data.username || "";
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function loadShop() {
+            initLanguage();
+            render();
+
+            try {
+                const res = await fetch("/api/shop/1");
+                if (!res.ok) throw new Error("Failed to load shop");
+                shopData = await res.json();
+                applyTheme();
+            } catch (err) {
+                document.getElementById("shopName").textContent = t("shop_name_placeholder");
+                console.error(err);
+            }
+
+            await Promise.all([
+                loadMenu(),
+                loadBotInfo(),
+                handleStartReferral(),
+                loadPoints(),
+                loadFeaturedReviews(),
+                refreshQueueStatus(),
+            ]);
+            startQueuePolling();
+            render();
+        }
+
+        loadShop();
+    </script>
+</body>
+</html>
