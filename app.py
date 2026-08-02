@@ -40,11 +40,11 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8997438789:AAHNsJRI0SxRiAfq1yc0vVCYFbZaEgYUm6s")
-PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://diner-copied-herbal.ngrok-free.dev")
+BASE_URL = os.getenv("BASE_URL", "").rstrip("/")
 OWNER_ID = int(os.environ.get("OWNER_ID", "6745205121"))
 SHOP_ID = 1
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "")
-FLASK_PORT = 5000
+FLASK_PORT = int(os.environ.get("PORT", 5000))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 LOGO_PATH = os.path.join(STATIC_DIR, "logo.png")
 BG_DIR = os.path.join(os.path.dirname(__file__), "webapp", "static", "backgrounds")
@@ -924,6 +924,33 @@ def serve_static(filename):
     return send_from_directory(STATIC_DIR, filename)
 
 
+def public_url(path: str) -> str:
+    """Build an absolute public URL from a path using BASE_URL."""
+    if not path:
+        return BASE_URL
+    if path.startswith("http://") or path.startswith("https://"):
+        for marker in ("/static/", "/webapp/"):
+            idx = path.find(marker)
+            if idx >= 0:
+                path = path[idx:]
+                break
+        else:
+            return path
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return f"{BASE_URL}{path}" if BASE_URL else path
+
+
+def absolutize_media_url(url: str | None) -> str | None:
+    """Rewrite stored media URLs so they use the current BASE_URL."""
+    if not url:
+        return None
+    url = str(url).strip()
+    if not url:
+        return None
+    return public_url(url)
+
+
 @flask_app.route("/api/shop/<int:shop_id>")
 def get_shop(shop_id):
     shop = database.get_shop_settings(shop_id)
@@ -935,10 +962,12 @@ def get_shop(shop_id):
             "name_en": shop.get("name_en"),
             "name_km": shop.get("name_km"),
             "name_zh": shop.get("name_zh"),
-            "logo_url": shop.get("logo_url"),
+            "logo_url": absolutize_media_url(shop.get("logo_url")),
             "primary_color": shop.get("primary_color"),
             "background_color": shop.get("background_color"),
-            "background_image_url": shop.get("background_image_url"),
+            "background_image_url": absolutize_media_url(
+                shop.get("background_image_url")
+            ),
             "group_invite_link": shop.get("group_invite_link"),
         }
     )
@@ -966,7 +995,7 @@ def get_menu(shop_id):
                 "name_km": item.get("name_km"),
                 "name_zh": item.get("name_zh"),
                 "price": item.get("price"),
-                "image_url": item.get("image_url"),
+                "image_url": absolutize_media_url(item.get("image_url")),
                 "is_vegetarian": int(item.get("is_vegetarian") or 0),
             }
         )
@@ -1035,7 +1064,7 @@ def shop_name_for_lang(shop: dict | None, lang: str) -> str:
 
 
 def local_path_from_public_url(url: str | None) -> str | None:
-    """Map a PUBLIC_URL /static/... path to a local webapp/static file."""
+    """Map a BASE_URL /static/... path to a local webapp/static or static/ file."""
     if not url:
         return None
     marker = "/static/"
@@ -1700,7 +1729,7 @@ def create_review_api():
         filename = f"review_{order_id}_{user_id}_{uuid.uuid4().hex[:8]}{ext}"
         filepath = os.path.join(REVIEWS_DIR, filename)
         image_file.save(filepath)
-        image_url = f"{PUBLIC_URL.rstrip('/')}/static/reviews/{filename}"
+        image_url = f"{BASE_URL}/static/reviews/{filename}"
 
     try:
         result = database.create_review(
@@ -1739,6 +1768,9 @@ def user_points_api():
 @flask_app.route("/api/shop/<int:shop_id>/reviews/featured", methods=["GET"])
 def featured_reviews_api(shop_id: int):
     reviews = database.get_featured_reviews(shop_id)
+    for review in reviews:
+        if isinstance(review, dict) and review.get("image_url"):
+            review["image_url"] = absolutize_media_url(review.get("image_url"))
     return jsonify({"ok": True, "reviews": reviews})
 
 
@@ -2050,7 +2082,7 @@ async def receive_payment_amount(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data.pop("pay_order_id", None)
         return ConversationHandler.END
 
-    payment_url = f"{PUBLIC_URL.rstrip('/')}/static/payments/{filename}"
+    payment_url = f"{BASE_URL}/static/payments/{filename}"
     customer_id = int(order["customer_id"])
 
     try:
@@ -2083,7 +2115,7 @@ async def send_review_invite(bot, order: dict) -> None:
         return
     cust_lang = detect_lang_code(order.get("customer_language") or "en")
     review_url = (
-        f"{PUBLIC_URL.rstrip('/')}/webapp/review.html?order_id={order['id']}"
+        f"{BASE_URL}/webapp/review.html?order_id={order['id']}"
     )
     keyboard = InlineKeyboardMarkup(
         [
@@ -2189,7 +2221,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     except Exception:
                         logger.exception("Failed to save referral")
 
-        webapp_url = f"{PUBLIC_URL.rstrip('/')}/webapp/index.html"
+        webapp_url = f"{BASE_URL}/webapp/index.html"
         welcome = t(lang, "welcome_message")
         try:
             keyboard = InlineKeyboardMarkup(
@@ -2213,7 +2245,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         try:
             await message.reply_text(
                 "Welcome! Open the menu:\n"
-                + f"{PUBLIC_URL.rstrip('/')}/webapp/index.html"
+                + f"{BASE_URL}/webapp/index.html"
             )
         except Exception:
             logger.exception("start_command fallback also failed")
@@ -2766,21 +2798,32 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not message:
         return ConversationHandler.END
 
-    lang = get_lang(update, context)
+    try:
+        remember_owner_language(update)
+        lang = get_lang(update, context)
 
-    if not is_owner(update):
-        await message.reply_text(t(lang, "owner_only"))
-        return ConversationHandler.END
+        if not is_owner(update):
+            await message.reply_text(t(lang, "owner_only"))
+            return ConversationHandler.END
 
-    shop = database.get_shop_settings(SHOP_ID)
-    if not shop:
-        await message.reply_text(t(lang, "shop_not_found"))
-        return ConversationHandler.END
+        shop = database.get_shop_settings(SHOP_ID)
+        if not shop:
+            await message.reply_text(t(lang, "shop_not_found"))
+            return ConversationHandler.END
 
-    await message.reply_text(
-        format_settings_message(shop, lang),
-        reply_markup=settings_keyboard(lang),
-    )
+        await message.reply_text(
+            format_settings_message(shop, lang),
+            reply_markup=settings_keyboard(lang),
+        )
+        logger.info("Replied to /settings in chat %s", update.effective_chat.id)
+    except Exception:
+        logger.exception("settings_command failed")
+        try:
+            await message.reply_text(
+                "Settings error. Try /settings again, or restart the bot."
+            )
+        except Exception:
+            logger.exception("settings_command fallback also failed")
     return ConversationHandler.END
 
 
@@ -2801,7 +2844,7 @@ async def preview_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         bot_username = bot_me.username
 
     preview_link = f"https://t.me/{bot_username}?startapp=shop_{SHOP_ID}"
-    webapp_url = f"{PUBLIC_URL.rstrip('/')}/webapp/index.html"
+    webapp_url = f"{BASE_URL}/webapp/index.html"
     keyboard = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(t(lang, "btn_preview"), web_app=WebAppInfo(url=webapp_url))],
@@ -3010,7 +3053,7 @@ async def receive_logo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     file = await context.bot.get_file(photo.file_id)
     await file.download_to_drive(LOGO_PATH)
 
-    logo_url = f"{PUBLIC_URL.rstrip('/')}/static/logo.png"
+    logo_url = f"{BASE_URL}/static/logo.png"
     database.update_shop_settings(SHOP_ID, logo_url=logo_url)
     shop = database.get_shop_settings(SHOP_ID)
     await message.reply_text(
@@ -3039,7 +3082,7 @@ async def receive_khqr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     file = await context.bot.get_file(photo.file_id)
     await file.download_to_drive(filepath)
 
-    khqr_url = f"{PUBLIC_URL.rstrip('/')}/static/khqr/{filename}"
+    khqr_url = f"{BASE_URL}/static/khqr/{filename}"
     database.update_shop_settings(SHOP_ID, khqr_url=khqr_url)
     shop = database.get_shop_settings(SHOP_ID)
     await message.reply_text(
@@ -3068,7 +3111,7 @@ async def receive_background_image(update: Update, context: ContextTypes.DEFAULT
     file = await context.bot.get_file(photo.file_id)
     await file.download_to_drive(filepath)
 
-    bg_url = f"{PUBLIC_URL.rstrip('/')}/static/backgrounds/{filename}"
+    bg_url = f"{BASE_URL}/static/backgrounds/{filename}"
     database.update_shop_settings(SHOP_ID, background_image_url=bg_url)
     shop = database.get_shop_settings(SHOP_ID)
     await message.reply_text(
@@ -3619,7 +3662,7 @@ async def receive_item_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
     file = await context.bot.get_file(photo.file_id)
     await file.download_to_drive(filepath)
 
-    image_url = f"{PUBLIC_URL.rstrip('/')}/static/menu/{filename}"
+    image_url = f"{BASE_URL}/static/menu/{filename}"
     return await finish_add_item(update, context, image_url)
 
 

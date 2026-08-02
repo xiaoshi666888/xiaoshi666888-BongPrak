@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.db
+ngrok.exe
+owner_lang.txt
+start.bat
+webapp/static/menu/
+webapp/static/payments/
+webapp/static/posters/
+webapp/static/reviews/
+webapp/static/khqr/
+fonts/
