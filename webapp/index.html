@@ -760,6 +760,33 @@
             tg.expand();
         }
 
+        const ORIGIN = window.location.origin;
+
+        function appUrl(path) {
+            if (!path) return ORIGIN;
+            const raw = String(path).trim();
+            if (!raw) return ORIGIN;
+            if (
+                raw.startsWith("blob:") ||
+                raw.startsWith("data:") ||
+                raw.startsWith("https://t.me/") ||
+                raw.startsWith("http://t.me/") ||
+                raw.startsWith("https://telegram.") ||
+                raw.startsWith("http://telegram.") ||
+                raw.startsWith("https://www.tiktok.com") ||
+                raw.startsWith("https://tiktok.com")
+            ) {
+                return raw;
+            }
+            try {
+                if (raw.startsWith("http://") || raw.startsWith("https://")) {
+                    const u = new URL(raw);
+                    return ORIGIN + u.pathname + u.search + u.hash;
+                }
+            } catch (_) {}
+            return ORIGIN + (raw.startsWith("/") ? raw : "/" + raw);
+        }
+
         const translations = {
             en: {
                 shop_name_placeholder: "Shop",
@@ -1129,7 +1156,7 @@
             const userId = currentUserId();
             if (!userId) return;
             try {
-                const res = await fetch(`/api/queue/status?user_id=${userId}`);
+                const res = await fetch(appUrl(`/api/queue/status?user_id=${userId}`));
                 const data = await res.json();
                 if (!data.ok) return;
                 if (!data.in_queue) {
@@ -1166,7 +1193,7 @@
             }
             const partySize = parseInt(document.getElementById("partySizeInput").value, 10) || 1;
             try {
-                const res = await fetch("/api/queue/join", {
+                const res = await fetch(appUrl("/api/queue/join"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -1214,7 +1241,7 @@
                 return;
             }
             try {
-                const res = await fetch("/api/submit_tiktok", {
+                const res = await fetch(appUrl("/api/submit_tiktok"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -1270,7 +1297,8 @@
 
             const primary = shopData.primary_color || "#FF5722";
             const bg = shopData.background_color || "#FFFFFF";
-            const bgImage = (shopData.background_image_url || "").trim();
+            const bgRaw = (shopData.background_image_url || "").trim();
+            const bgImage = bgRaw ? appUrl(bgRaw) : "";
 
             document.documentElement.style.setProperty("--primary", primary);
             document.documentElement.style.setProperty("--bg", bg);
@@ -1289,7 +1317,7 @@
 
             const logo = document.getElementById("shopLogo");
             if (shopData.logo_url) {
-                logo.src = shopData.logo_url;
+                logo.src = appUrl(shopData.logo_url);
                 logo.style.display = "block";
             } else {
                 logo.style.display = "none";
@@ -1472,7 +1500,7 @@
                     const thumb = document.createElement("img");
                     thumb.className = "menu-item-thumb";
                     thumb.alt = getItemName(item);
-                    thumb.src = item.image_url || (
+                    thumb.src = (item.image_url ? appUrl(item.image_url) : null) || (
                         "data:image/svg+xml," +
                         encodeURIComponent(
                             `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56">` +
@@ -1616,7 +1644,7 @@
                     user_id: String(userId),
                     total: String(cartTotal()),
                 });
-                const res = await fetch(`/api/validate_coupon?${params}`);
+                const res = await fetch(appUrl(`/api/validate_coupon?${params}`));
                 const data = await res.json();
                 if (!data.valid) {
                     clearCoupon();
@@ -1649,7 +1677,7 @@
                 return;
             }
             try {
-                const res = await fetch(`/api/mycoupons?user_id=${userId}`);
+                const res = await fetch(appUrl(`/api/mycoupons?user_id=${userId}`));
                 const data = await res.json();
                 const coupons = data.coupons || [];
                 if (!coupons.length) {
@@ -1731,7 +1759,7 @@
                     `<div class="review-name">${r.first_name || "Guest"}</div>` +
                     `<div class="review-comment">${r.comment || ""}</div>`;
                 if (r.image_url) {
-                    html += `<img src="${r.image_url}" alt="">`;
+                    html += `<img src="${appUrl(r.image_url)}" alt="">`;
                 }
                 card.innerHTML = html;
                 track.appendChild(card);
@@ -1746,7 +1774,7 @@
                 return;
             }
             try {
-                const res = await fetch(`/api/user/points?user_id=${userId}`);
+                const res = await fetch(appUrl(`/api/user/points?user_id=${userId}`));
                 const data = await res.json();
                 userPoints = data.ok ? Number(data.points) || 0 : 0;
             } catch (err) {
@@ -1758,7 +1786,7 @@
 
         async function loadFeaturedReviews() {
             try {
-                const res = await fetch("/api/shop/1/reviews/featured");
+                const res = await fetch(appUrl("/api/shop/1/reviews/featured"));
                 const data = await res.json();
                 renderFeaturedReviews(data.reviews || []);
             } catch (err) {
@@ -1774,7 +1802,7 @@
                 return;
             }
             try {
-                const res = await fetch("/api/redeem_points", {
+                const res = await fetch(appUrl("/api/redeem_points"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ user_id: userId }),
@@ -1845,7 +1873,7 @@
             };
 
             try {
-                const res = await fetch("/api/order", {
+                const res = await fetch(appUrl("/api/order"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload),
@@ -1916,7 +1944,7 @@
 
         async function loadMenu() {
             try {
-                const res = await fetch("/api/menu/1");
+                const res = await fetch(appUrl("/api/menu/1"));
                 if (!res.ok) throw new Error("Failed to load menu");
                 menuData = await res.json();
             } catch (err) {
@@ -1945,7 +1973,7 @@
             const referrerId = parseInt(startParam.split("_")[1], 10);
             if (!referrerId || referrerId === userId) return;
             try {
-                await fetch("/api/apply_referral", {
+                await fetch(appUrl("/api/apply_referral"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -1960,7 +1988,7 @@
 
         async function loadBotInfo() {
             try {
-                const res = await fetch("/api/bot_info");
+                const res = await fetch(appUrl("/api/bot_info"));
                 const data = await res.json();
                 botUsername = data.username || "";
             } catch (err) {
@@ -1973,7 +2001,7 @@
             render();
 
             try {
-                const res = await fetch("/api/shop/1");
+                const res = await fetch(appUrl("/api/shop/1"));
                 if (!res.ok) throw new Error("Failed to load shop");
                 shopData = await res.json();
                 applyTheme();

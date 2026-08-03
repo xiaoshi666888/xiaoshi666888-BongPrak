@@ -100,6 +100,33 @@
         const tg = window.Telegram?.WebApp;
         if (tg) { tg.ready(); tg.expand(); }
 
+        const ORIGIN = window.location.origin;
+
+        function appUrl(path) {
+            if (!path) return ORIGIN;
+            const raw = String(path).trim();
+            if (!raw) return ORIGIN;
+            if (
+                raw.startsWith("blob:") ||
+                raw.startsWith("data:") ||
+                raw.startsWith("https://t.me/") ||
+                raw.startsWith("http://t.me/") ||
+                raw.startsWith("https://telegram.") ||
+                raw.startsWith("http://telegram.") ||
+                raw.startsWith("https://www.tiktok.com") ||
+                raw.startsWith("https://tiktok.com")
+            ) {
+                return raw;
+            }
+            try {
+                if (raw.startsWith("http://") || raw.startsWith("https://")) {
+                    const u = new URL(raw);
+                    return ORIGIN + u.pathname + u.search + u.hash;
+                }
+            } catch (_) {}
+            return ORIGIN + (raw.startsWith("/") ? raw : "/" + raw);
+        }
+
         const translations = {
             en: {
                 title: "Rate your meal",
@@ -238,7 +265,7 @@
             if (file) form.append("image", file);
 
             try {
-                const res = await fetch("/api/review", { method: "POST", body: form });
+                const res = await fetch(appUrl("/api/review"), { method: "POST", body: form });
                 const data = await res.json();
                 if (!res.ok || !data.ok) {
                     if (data.error === "already_reviewed") {
