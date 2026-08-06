@@ -40,17 +40,34 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8997438789:AAHNsJRI0SxRiAfq1yc0vVCYFbZaEgYUm6s")
-BASE_URL = os.getenv("BASE_URL", "https://bongprak.top").rstrip("/")
+DEFAULT_BASE_URL = "https://bongprak.top"
+LEGACY_PUBLIC_HOSTS = (
+    "diner-copied-herbal.ngrok-free.dev",
+    "ngrok-free.app",
+    "ngrok-free.dev",
+    "ngrok.io",
+)
+
+
+def _resolve_base_url() -> str:
+    raw = (os.getenv("BASE_URL") or DEFAULT_BASE_URL).strip().rstrip("/")
+    if not raw:
+        return DEFAULT_BASE_URL
+    lowered = raw.lower()
+    if any(host in lowered for host in LEGACY_PUBLIC_HOSTS) or "ngrok" in lowered:
+        logging.getLogger(__name__).warning(
+            "Ignoring invalid/ngrok BASE_URL=%s; using %s", raw, DEFAULT_BASE_URL
+        )
+        return DEFAULT_BASE_URL
+    return raw
+
+
+BASE_URL = _resolve_base_url()
 _owner_raw = re.sub(r"\D", "", os.environ.get("OWNER_ID", "6745205121") or "")
 OWNER_ID = int(_owner_raw or "6745205121")
 SHOP_ID = 1
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "")
 FLASK_PORT = int(os.environ.get("PORT", 5000))
-LEGACY_PUBLIC_HOSTS = (
-    "diner-copied-herbal.ngrok-free.dev",
-    "ngrok-free.dev",
-    "ngrok.io",
-)
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 LOGO_PATH = os.path.join(STATIC_DIR, "logo.png")
 BG_DIR = os.path.join(os.path.dirname(__file__), "webapp", "static", "backgrounds")
@@ -722,7 +739,7 @@ def configure_telegram_webapp() -> None:
         logger.error("BASE_URL must be https:// for Telegram Mini Apps: %s", BASE_URL)
         return
 
-    webapp_url = f"{BASE_URL}/webapp/index.html"
+    webapp_url = mini_app_url()
     api = f"https://api.telegram.org/bot{BOT_TOKEN}"
     try:
         requests.post(
@@ -974,27 +991,48 @@ def public_url(path: str) -> str:
     """Build an absolute public URL from a path using BASE_URL."""
     if not path:
         return BASE_URL
-    if path.startswith("http://") or path.startswith("https://"):
+    raw = str(path).strip()
+    if raw.startswith("http://") or raw.startswith("https://"):
         for marker in ("/static/", "/webapp/"):
-            idx = path.find(marker)
+            idx = raw.find(marker)
             if idx >= 0:
-                path = path[idx:]
+                raw = raw[idx:]
                 break
         else:
-            return path
-    if not path.startswith("/"):
-        path = f"/{path}"
-    return f"{BASE_URL}{path}" if BASE_URL else path
+            # Foreign absolute URL without our path markers — keep as-is
+            return raw
+    if not raw.startswith("/"):
+        raw = f"/{raw}"
+    return f"{BASE_URL}{raw}"
 
 
 def absolutize_media_url(url: str | None) -> str | None:
-    """Rewrite stored media URLs so they use the current BASE_URL."""
+    """Rewrite stored media URLs so they always use the current BASE_URL."""
     if not url:
         return None
     url = str(url).strip()
     if not url:
         return None
+    # Always rebuild /static and /webapp links onto BASE_URL (kills stale ngrok hosts)
     return public_url(url)
+
+
+def mini_app_url(path: str = "/webapp/index.html") -> str:
+    """HTTPS Mini App URL that never points at ngrok."""
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return f"{BASE_URL}{path}"
+
+
+@flask_app.route("/api/health")
+def health_api():
+    return jsonify(
+        {
+            "ok": True,
+            "base_url": BASE_URL,
+            "mini_app": mini_app_url(),
+        }
+    )
 
 
 @flask_app.route("/api/shop/<int:shop_id>")
@@ -2267,7 +2305,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     except Exception:
                         logger.exception("Failed to save referral")
 
-        webapp_url = f"{BASE_URL}/webapp/index.html"
+        webapp_url = mini_app_url()
         welcome = t(lang, "welcome_message")
         try:
             keyboard = InlineKeyboardMarkup(
@@ -2285,13 +2323,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             logger.exception("Failed to send WebApp button, sending fallback link")
             await message.reply_text(f"{welcome}\n{webapp_url}")
 
-        logger.info("Replied to /start in chat %s", update.effective_chat.id)
+        logger.info(
+            "Replied to /start in chat %s with Mini App %s",
+            update.effective_chat.id,
+            webapp_url,
+        )
     except Exception:
         logger.exception("start_command failed")
         try:
             await message.reply_text(
-                "Welcome! Open the menu:\n"
-                + f"{BASE_URL}/webapp/index.html"
+                "Welcome! Open the menu:\n" + mini_app_url()
             )
         except Exception:
             logger.exception("start_command fallback also failed")
@@ -2890,7 +2931,7 @@ async def preview_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         bot_username = bot_me.username
 
     preview_link = f"https://t.me/{bot_username}?startapp=shop_{SHOP_ID}"
-    webapp_url = f"{BASE_URL}/webapp/index.html"
+    webapp_url = mini_app_url()
     keyboard = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(t(lang, "btn_preview"), web_app=WebAppInfo(url=webapp_url))],
