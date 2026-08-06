@@ -1077,9 +1077,20 @@ def get_menu(shop_id):
         logger.exception("menu image backfill failed")
     items = database.get_menu_items(shop_id)
     festival = database.get_active_festival(shop_id)
+
+    # In-memory fallback when DB write is unavailable (e.g. ephemeral disk)
+    image_by_name: dict[str, str] = {}
+    for item in items:
+        name = (item.get("name_en") or "").strip().lower()
+        url = (item.get("image_url") or "").strip()
+        if name and url:
+            image_by_name[name] = url
+
     grouped: OrderedDict[str, list] = OrderedDict()
     for item in items:
         category = item.get("category") or "Other"
+        name = (item.get("name_en") or "").strip().lower()
+        raw_image = (item.get("image_url") or "").strip() or image_by_name.get(name)
         grouped.setdefault(category, []).append(
             {
                 "id": item["id"],
@@ -1087,7 +1098,7 @@ def get_menu(shop_id):
                 "name_km": item.get("name_km"),
                 "name_zh": item.get("name_zh"),
                 "price": item.get("price"),
-                "image_url": absolutize_media_url(item.get("image_url")),
+                "image_url": absolutize_media_url(raw_image),
                 "is_vegetarian": int(item.get("is_vegetarian") or 0),
             }
         )
