@@ -721,6 +721,9 @@ database.init_db()
 _migrated = database.migrate_legacy_public_urls(BASE_URL, LEGACY_PUBLIC_HOSTS)
 if _migrated:
     logger.info("Migrated %s legacy public URL(s) to BASE_URL=%s", _migrated, BASE_URL)
+_backfilled = database.backfill_missing_menu_images()
+if _backfilled:
+    logger.info("Backfilled image_url for %s menu item(s)", _backfilled)
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(BG_DIR, exist_ok=True)
 os.makedirs(MENU_DIR, exist_ok=True)
@@ -1067,6 +1070,11 @@ def localize_category(category: str) -> dict:
 
 @flask_app.route("/api/menu/<int:shop_id>")
 def get_menu(shop_id):
+    # Heal missing duplicate-name images (e.g. Coffee without photo)
+    try:
+        database.backfill_missing_menu_images()
+    except Exception:
+        logger.exception("menu image backfill failed")
     items = database.get_menu_items(shop_id)
     festival = database.get_active_festival(shop_id)
     grouped: OrderedDict[str, list] = OrderedDict()

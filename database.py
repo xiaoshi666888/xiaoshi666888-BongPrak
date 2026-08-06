@@ -358,6 +358,40 @@ def migrate_legacy_public_urls(new_base_url: str, legacy_hosts: tuple[str, ...] 
     return updated
 
 
+def backfill_missing_menu_images() -> int:
+    """Copy image_url from another item with the same English name when missing."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, name_en, image_url FROM menu_items"
+        ).fetchall()
+        by_name: dict[str, str] = {}
+        for row in rows:
+            name = (row["name_en"] or "").strip().lower()
+            url = (row["image_url"] or "").strip()
+            if name and url:
+                by_name[name] = url
+
+        updated = 0
+        for row in rows:
+            current = (row["image_url"] or "").strip()
+            if current:
+                continue
+            name = (row["name_en"] or "").strip().lower()
+            donor = by_name.get(name)
+            if not donor:
+                continue
+            conn.execute(
+                "UPDATE menu_items SET image_url = ? WHERE id = ?",
+                (donor, row["id"]),
+            )
+            updated += 1
+        conn.commit()
+        return updated
+    finally:
+        conn.close()
+
+
 def get_shop_settings(shop_id: int):
     conn = get_connection()
     try:
