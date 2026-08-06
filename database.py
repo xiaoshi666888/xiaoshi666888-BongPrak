@@ -303,6 +303,61 @@ def init_db():
         conn.close()
 
 
+def migrate_legacy_public_urls(new_base_url: str, legacy_hosts: tuple[str, ...] | list[str]) -> int:
+    """Rewrite stored absolute URLs that still point at old public hosts."""
+    new_base = (new_base_url or "").rstrip("/")
+    if not new_base:
+        return 0
+    updated = 0
+    conn = get_connection()
+    try:
+        jobs = [
+            ("shop_settings", ("logo_url", "background_image_url", "khqr_url", "group_invite_link")),
+            ("menu_items", ("image_url",)),
+            ("reviews", ("image_url",)),
+            ("orders", ("payment_image_url",)),
+        ]
+        for table, columns in jobs:
+            # Ensure table exists
+            exists = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if not exists:
+                continue
+            table_cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for col in columns:
+                if col not in table_cols:
+                    continue
+                rows = conn.execute(
+                    f"SELECT id, {col} AS url FROM {table} WHERE {col} IS NOT NULL AND {col} != ''"
+                ).fetchall()
+                for row in rows:
+                    url = row["url"] or ""
+                    if not any(host in url for host in legacy_hosts):
+                        continue
+                    marker = None
+                    for m in ("/static/", "/webapp/"):
+                        idx = url.find(m)
+                        if idx >= 0:
+                            marker = url[idx:]
+                            break
+                    if not marker:
+                        continue
+                    new_url = f"{new_base}{marker}"
+                    if new_url == url:
+                        continue
+                    conn.execute(
+                        f"UPDATE {table} SET {col} = ? WHERE id = ?",
+                        (new_url, row["id"]),
+                    )
+                    updated += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return updated
+
+
 def get_shop_settings(shop_id: int):
     conn = get_connection()
     try:

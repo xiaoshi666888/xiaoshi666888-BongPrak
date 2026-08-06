@@ -40,11 +40,17 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8997438789:AAHNsJRI0SxRiAfq1yc0vVCYFbZaEgYUm6s")
-BASE_URL = os.getenv("BASE_URL", "").rstrip("/")
-OWNER_ID = int(os.environ.get("OWNER_ID", "6745205121"))
+BASE_URL = os.getenv("BASE_URL", "https://bongprak.top").rstrip("/")
+_owner_raw = re.sub(r"\D", "", os.environ.get("OWNER_ID", "6745205121") or "")
+OWNER_ID = int(_owner_raw or "6745205121")
 SHOP_ID = 1
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "")
 FLASK_PORT = int(os.environ.get("PORT", 5000))
+LEGACY_PUBLIC_HOSTS = (
+    "diner-copied-herbal.ngrok-free.dev",
+    "ngrok-free.dev",
+    "ngrok.io",
+)
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 LOGO_PATH = os.path.join(STATIC_DIR, "logo.png")
 BG_DIR = os.path.join(os.path.dirname(__file__), "webapp", "static", "backgrounds")
@@ -695,6 +701,9 @@ _owner_lang: str = "en"
 
 flask_app = Flask(__name__, static_folder="webapp", static_url_path="/webapp")
 database.init_db()
+_migrated = database.migrate_legacy_public_urls(BASE_URL, LEGACY_PUBLIC_HOSTS)
+if _migrated:
+    logger.info("Migrated %s legacy public URL(s) to BASE_URL=%s", _migrated, BASE_URL)
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(BG_DIR, exist_ok=True)
 os.makedirs(MENU_DIR, exist_ok=True)
@@ -702,6 +711,43 @@ os.makedirs(KHQR_DIR, exist_ok=True)
 os.makedirs(PAYMENTS_DIR, exist_ok=True)
 os.makedirs(REVIEWS_DIR, exist_ok=True)
 os.makedirs(POSTERS_DIR, exist_ok=True)
+
+
+def configure_telegram_webapp() -> None:
+    """Point Telegram Menu Button / Mini App at the current BASE_URL."""
+    if not BASE_URL:
+        logger.error("BASE_URL is empty; Mini App buttons will not work")
+        return
+    if not BASE_URL.startswith("https://"):
+        logger.error("BASE_URL must be https:// for Telegram Mini Apps: %s", BASE_URL)
+        return
+
+    webapp_url = f"{BASE_URL}/webapp/index.html"
+    api = f"https://api.telegram.org/bot{BOT_TOKEN}"
+    try:
+        requests.post(
+            f"{api}/deleteWebhook",
+            json={"drop_pending_updates": False},
+            timeout=20,
+        )
+        resp = requests.post(
+            f"{api}/setChatMenuButton",
+            json={
+                "menu_button": {
+                    "type": "web_app",
+                    "text": "Open Menu",
+                    "web_app": {"url": webapp_url},
+                }
+            },
+            timeout=20,
+        )
+        data = resp.json()
+        if data.get("ok"):
+            logger.info("Telegram menu button set to %s", webapp_url)
+        else:
+            logger.error("setChatMenuButton failed: %s", data)
+    except Exception:
+        logger.exception("Failed to configure Telegram Mini App menu button")
 
 
 def detect_lang_code(language_code: str | None) -> str:
@@ -3946,6 +3992,8 @@ def run_bot():
 
 def main():
     ensure_single_instance()
+    logger.info("Using BASE_URL=%s OWNER_ID=%s", BASE_URL, OWNER_ID)
+    configure_telegram_webapp()
 
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
