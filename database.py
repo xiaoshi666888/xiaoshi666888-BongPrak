@@ -2,7 +2,6 @@ import json
 import os
 import secrets
 import string
-import urllib.parse
 from datetime import datetime, timedelta
 
 import psycopg2
@@ -20,15 +19,10 @@ MINUTES_PER_PARTY = 8
 
 
 def get_db_connection():
-    """Parse DATABASE_URL and return a psycopg2 connection."""
-    url = urllib.parse.urlparse(os.environ["DATABASE_URL"])
-    conn = psycopg2.connect(
-        database=url.path[1:],
-        user=url.username,
-        password=url.password,
-        host=url.hostname,
-        port=url.port,
-    )
+    """Return a psycopg2 connection using the DATABASE_URL DSN."""
+    dsn = os.environ["DATABASE_URL"]
+    conn = psycopg2.connect(dsn)
+    conn.cursor_factory = psycopg2.extras.RealDictCursor
     return conn
 
 
