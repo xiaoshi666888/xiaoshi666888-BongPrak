@@ -30,7 +30,10 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
+import psycopg2.extras
+
 import database
+from database import get_db_connection
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -68,15 +71,21 @@ OWNER_ID = int(_owner_raw or "6745205121")
 SHOP_ID = 1
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "")
 FLASK_PORT = int(os.environ.get("PORT", 5000))
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+# Persistent storage (Railway volume). Uploads live under DATA_DIR/static.
+DATA_DIR = os.environ.get("DATA_DIR", "/data")
+STATIC_DIR = os.path.join(DATA_DIR, "static")
 LOGO_PATH = os.path.join(STATIC_DIR, "logo.png")
-BG_DIR = os.path.join(os.path.dirname(__file__), "webapp", "static", "backgrounds")
-MENU_DIR = os.path.join(os.path.dirname(__file__), "webapp", "static", "menu")
-KHQR_DIR = os.path.join(os.path.dirname(__file__), "webapp", "static", "khqr")
-PAYMENTS_DIR = os.path.join(os.path.dirname(__file__), "webapp", "static", "payments")
-REVIEWS_DIR = os.path.join(os.path.dirname(__file__), "webapp", "static", "reviews")
-POSTERS_DIR = os.path.join(os.path.dirname(__file__), "webapp", "static", "posters")
+BG_DIR = os.path.join(STATIC_DIR, "backgrounds")
+MENU_DIR = os.path.join(STATIC_DIR, "menu")
+KHQR_DIR = os.path.join(STATIC_DIR, "khqr")
+PAYMENTS_DIR = os.path.join(STATIC_DIR, "payments")
+REVIEWS_DIR = os.path.join(STATIC_DIR, "reviews")
+POSTERS_DIR = os.path.join(STATIC_DIR, "posters")
+# Bundled read-only assets (shipped with the app)
+BUNDLED_WEBAPP_STATIC = os.path.join(os.path.dirname(__file__), "webapp", "static")
 FONTS_DIR = os.path.join(os.path.dirname(__file__), "fonts")
+OWNER_LANG_FILE = os.path.join(DATA_DIR, "owner_lang.txt")
 # Preferred project fonts (Noto) — language-specific files avoid tofu boxes
 FONT_FILES = {
     "en": "NotoSans-Regular.ttf",
@@ -713,7 +722,6 @@ ORDER_TRANSLATIONS = {
     },
 }
 
-OWNER_LANG_FILE = os.path.join(os.path.dirname(__file__), "owner_lang.txt")
 _owner_lang: str = "en"
 
 flask_app = Flask(__name__, static_folder="webapp", static_url_path="/webapp")
@@ -724,6 +732,7 @@ if _migrated:
 _backfilled = database.backfill_missing_menu_images()
 if _backfilled:
     logger.info("Backfilled image_url for %s menu item(s)", _backfilled)
+os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(BG_DIR, exist_ok=True)
 os.makedirs(MENU_DIR, exist_ok=True)
@@ -982,11 +991,13 @@ def serve_webapp(filename):
 
 @flask_app.route("/static/<path:filename>")
 def serve_static(filename):
-    # Prefer webapp/static (backgrounds), then project static/ (logo)
-    webapp_static = os.path.join(os.path.dirname(__file__), "webapp", "static")
-    webapp_candidate = os.path.join(webapp_static, filename)
-    if os.path.isfile(webapp_candidate):
-        return send_from_directory(webapp_static, filename)
+    # Prefer DATA_DIR/static (uploads), then bundled webapp/static as fallback
+    data_candidate = os.path.join(STATIC_DIR, filename)
+    if os.path.isfile(data_candidate):
+        return send_from_directory(STATIC_DIR, filename)
+    bundled_candidate = os.path.join(BUNDLED_WEBAPP_STATIC, filename)
+    if os.path.isfile(bundled_candidate):
+        return send_from_directory(BUNDLED_WEBAPP_STATIC, filename)
     return send_from_directory(STATIC_DIR, filename)
 
 
@@ -1167,7 +1178,7 @@ def shop_name_for_lang(shop: dict | None, lang: str) -> str:
 
 
 def local_path_from_public_url(url: str | None) -> str | None:
-    """Map a BASE_URL /static/... path to a local webapp/static or static/ file."""
+    """Map a BASE_URL /static/... path to DATA_DIR/static or bundled webapp/static."""
     if not url:
         return None
     marker = "/static/"
@@ -1175,10 +1186,10 @@ def local_path_from_public_url(url: str | None) -> str | None:
     if idx < 0:
         return None
     rel = url[idx + len(marker) :].lstrip("/").replace("/", os.sep)
-    candidate = os.path.join(os.path.dirname(__file__), "webapp", "static", rel)
+    candidate = os.path.join(STATIC_DIR, rel)
     if os.path.isfile(candidate):
         return candidate
-    fallback = os.path.join(STATIC_DIR, rel)
+    fallback = os.path.join(BUNDLED_WEBAPP_STATIC, rel)
     if os.path.isfile(fallback):
         return fallback
     return None
@@ -2246,15 +2257,17 @@ async def grant_post_payment_rewards(bot, customer_id: int) -> None:
     lang = "en"
     try:
         # Prefer customer language from a recent order
-        conn = database.get_connection()
+        conn = get_db_connection()
         try:
-            row = conn.execute(
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
                 """
                 SELECT customer_language FROM orders
-                WHERE customer_id = ? ORDER BY id DESC LIMIT 1
+                WHERE customer_id = %s ORDER BY id DESC LIMIT 1
                 """,
                 (customer_id,),
-            ).fetchone()
+            )
+            row = cur.fetchone()
             if row and row["customer_language"]:
                 lang = detect_lang_code(row["customer_language"])
         finally:

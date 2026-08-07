@@ -1,10 +1,12 @@
 import json
-import sqlite3
+import os
 import secrets
 import string
+import urllib.parse
 from datetime import datetime, timedelta
 
-DB_PATH = "shop.db"
+import psycopg2
+import psycopg2.extras
 
 ORDER_STATUSES = (
     "pending",
@@ -17,41 +19,89 @@ QUEUE_STATUSES = ("waiting", "ordering", "ready", "done", "cancelled")
 MINUTES_PER_PARTY = 8
 
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+def get_db_connection():
+    """Parse DATABASE_URL and return a psycopg2 connection."""
+    url = urllib.parse.urlparse(os.environ["DATABASE_URL"])
+    conn = psycopg2.connect(
+        database=url.path[1:],
+        user=url.username,
+        password=url.password,
+        host=url.hostname,
+        port=url.port,
+    )
     return conn
 
 
+# Backward-compatible alias
+get_connection = get_db_connection
+
+
+def _cursor(conn):
+    return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+
+def _table_columns(cur, table: str) -> set[str]:
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        """,
+        (table,),
+    )
+    return {row["column_name"] for row in cur.fetchall()}
+
+
+def _table_exists(cur, table: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = %s
+        """,
+        (table,),
+    )
+    return cur.fetchone() is not None
+
+
 def init_db():
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        conn.execute(
+        cur = _cursor(conn)
+
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS shop_settings (
-                id INTEGER PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 name_en TEXT NOT NULL,
                 name_km TEXT,
                 name_zh TEXT,
+                shop_name TEXT,
                 logo_url TEXT,
                 primary_color TEXT NOT NULL,
-                background_color TEXT
+                background_color TEXT,
+                background_image_url TEXT,
+                khqr_url TEXT,
+                current_festival_id INTEGER,
+                group_invite_link TEXT
             )
             """
         )
-        conn.execute(
+        cur.execute(
             """
-            INSERT OR IGNORE INTO shop_settings
+            INSERT INTO shop_settings
                 (id, name_en, name_km, name_zh, logo_url, primary_color, background_color)
             VALUES (1, 'My Shop', 'ហាងរបស់ខ្ញុំ', '我的店铺', NULL, '#FF5722', '#FFFFFF')
+            ON CONFLICT (id) DO NOTHING
             """
         )
 
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(shop_settings)")}
+        columns = _table_columns(cur, "shop_settings")
         for col, default in (
             ("name_en", "'My Shop'"),
             ("name_km", "NULL"),
             ("name_zh", "NULL"),
+            ("shop_name", "NULL"),
             ("logo_url", "NULL"),
             ("primary_color", "'#FF5722'"),
             ("background_color", "'#FFFFFF'"),
@@ -62,12 +112,12 @@ def init_db():
         ):
             if col not in columns:
                 col_type = "INTEGER" if col == "current_festival_id" else "TEXT"
-                conn.execute(
+                cur.execute(
                     f"ALTER TABLE shop_settings ADD COLUMN {col} {col_type} DEFAULT {default}"
                 )
 
-        if "shop_name" in columns:
-            conn.execute(
+        if "shop_name" in columns or "shop_name" in _table_columns(cur, "shop_settings"):
+            cur.execute(
                 """
                 UPDATE shop_settings
                 SET name_en = COALESCE(NULLIF(name_en, ''), shop_name, 'My Shop'),
@@ -77,10 +127,10 @@ def init_db():
                 """
             )
 
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS menu_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 shop_id INTEGER DEFAULT 1,
                 category TEXT,
                 name_en TEXT,
@@ -92,16 +142,16 @@ def init_db():
             )
             """
         )
-        menu_columns = {row[1] for row in conn.execute("PRAGMA table_info(menu_items)")}
+        menu_columns = _table_columns(cur, "menu_items")
         if "is_vegetarian" not in menu_columns:
-            conn.execute(
+            cur.execute(
                 "ALTER TABLE menu_items ADD COLUMN is_vegetarian INTEGER DEFAULT 0"
             )
 
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS festivals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 name_en TEXT NOT NULL,
                 name_km TEXT,
                 name_zh TEXT,
@@ -112,14 +162,16 @@ def init_db():
             )
             """
         )
-        festival_count = conn.execute("SELECT COUNT(*) FROM festivals").fetchone()[0]
+        cur.execute("SELECT COUNT(*) AS cnt FROM festivals")
+        festival_count = cur.fetchone()["cnt"]
         if festival_count == 0:
-            conn.executemany(
+            psycopg2.extras.execute_values(
+                cur,
                 """
                 INSERT INTO festivals
                     (name_en, name_km, name_zh, start_date, end_date,
                      discount_percent, is_vegetarian)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES %s
                 """,
                 [
                     (
@@ -152,22 +204,29 @@ def init_db():
                 ],
             )
 
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 shop_id INTEGER DEFAULT 1,
                 customer_id INTEGER,
                 customer_name TEXT,
                 items TEXT,
                 total REAL,
                 status TEXT DEFAULT 'pending',
+                order_type TEXT DEFAULT 'takeaway',
+                payment_image_url TEXT,
+                payment_amount REAL,
+                customer_language TEXT DEFAULT 'en',
+                coupon_code TEXT,
+                discount_amount REAL DEFAULT 0,
+                queue_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
 
-        order_columns = {row[1] for row in conn.execute("PRAGMA table_info(orders)")}
+        order_columns = _table_columns(cur, "orders")
         for col, ddl in (
             ("payment_image_url", "TEXT"),
             ("payment_amount", "REAL"),
@@ -178,16 +237,16 @@ def init_db():
             ("queue_id", "INTEGER"),
         ):
             if col not in order_columns:
-                conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {ddl}")
+                cur.execute(f"ALTER TABLE orders ADD COLUMN {col} {ddl}")
 
-        conn.execute(
+        cur.execute(
             "UPDATE orders SET status = 'completed' WHERE status IN ('paid', 'confirmed')"
         )
 
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS queue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 shop_id INTEGER DEFAULT 1,
                 user_id INTEGER NOT NULL,
                 queue_number INTEGER NOT NULL,
@@ -198,10 +257,10 @@ def init_db():
             """
         )
 
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS coupons (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 code TEXT UNIQUE NOT NULL,
                 type TEXT NOT NULL,
                 value REAL NOT NULL,
@@ -215,10 +274,10 @@ def init_db():
             """
         )
 
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS user_coupons (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 coupon_id INTEGER NOT NULL,
                 used INTEGER DEFAULT 0,
@@ -227,10 +286,10 @@ def init_db():
             """
         )
 
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS referrals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 referrer_id INTEGER NOT NULL,
                 referred_id INTEGER NOT NULL,
                 status TEXT DEFAULT 'pending',
@@ -242,15 +301,16 @@ def init_db():
         )
 
         # Seed WELCOME5 if missing
-        conn.execute(
+        cur.execute(
             """
-            INSERT OR IGNORE INTO coupons
+            INSERT INTO coupons
                 (code, type, value, min_order, shop_id, usage_limit, used_count, expires_at)
             VALUES ('WELCOME5', 'fixed', 5.0, 0, 1, 999999, 0, NULL)
+            ON CONFLICT (code) DO NOTHING
             """
         )
 
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS customers (
                 user_id INTEGER PRIMARY KEY,
@@ -260,18 +320,18 @@ def init_db():
             )
             """
         )
-        customer_cols = {row[1] for row in conn.execute("PRAGMA table_info(customers)")}
+        customer_cols = _table_columns(cur, "customers")
         if "points" not in customer_cols:
-            conn.execute(
+            cur.execute(
                 "ALTER TABLE customers ADD COLUMN points INTEGER DEFAULT 0"
             )
         if "first_name" not in customer_cols:
-            conn.execute("ALTER TABLE customers ADD COLUMN first_name TEXT")
+            cur.execute("ALTER TABLE customers ADD COLUMN first_name TEXT")
 
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS reviews (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 order_id INTEGER NOT NULL,
                 user_id INTEGER NOT NULL,
                 rating INTEGER NOT NULL,
@@ -284,10 +344,10 @@ def init_db():
             """
         )
 
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS tiktok_submissions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 order_id INTEGER,
                 video_url TEXT NOT NULL,
@@ -309,8 +369,9 @@ def migrate_legacy_public_urls(new_base_url: str, legacy_hosts: tuple[str, ...] 
     if not new_base:
         return 0
     updated = 0
-    conn = get_connection()
+    conn = get_db_connection()
     try:
+        cur = _cursor(conn)
         jobs = [
             ("shop_settings", ("logo_url", "background_image_url", "khqr_url", "group_invite_link")),
             ("menu_items", ("image_url",)),
@@ -318,20 +379,16 @@ def migrate_legacy_public_urls(new_base_url: str, legacy_hosts: tuple[str, ...] 
             ("orders", ("payment_image_url",)),
         ]
         for table, columns in jobs:
-            # Ensure table exists
-            exists = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                (table,),
-            ).fetchone()
-            if not exists:
+            if not _table_exists(cur, table):
                 continue
-            table_cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            table_cols = _table_columns(cur, table)
             for col in columns:
                 if col not in table_cols:
                     continue
-                rows = conn.execute(
+                cur.execute(
                     f"SELECT id, {col} AS url FROM {table} WHERE {col} IS NOT NULL AND {col} != ''"
-                ).fetchall()
+                )
+                rows = cur.fetchall()
                 for row in rows:
                     url = row["url"] or ""
                     if not any(host in url for host in legacy_hosts):
@@ -347,8 +404,8 @@ def migrate_legacy_public_urls(new_base_url: str, legacy_hosts: tuple[str, ...] 
                     new_url = f"{new_base}{marker}"
                     if new_url == url:
                         continue
-                    conn.execute(
-                        f"UPDATE {table} SET {col} = ? WHERE id = ?",
+                    cur.execute(
+                        f"UPDATE {table} SET {col} = %s WHERE id = %s",
                         (new_url, row["id"]),
                     )
                     updated += 1
@@ -360,11 +417,11 @@ def migrate_legacy_public_urls(new_base_url: str, legacy_hosts: tuple[str, ...] 
 
 def backfill_missing_menu_images() -> int:
     """Copy image_url from another item with the same English name when missing."""
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        rows = conn.execute(
-            "SELECT id, name_en, image_url FROM menu_items"
-        ).fetchall()
+        cur = _cursor(conn)
+        cur.execute("SELECT id, name_en, image_url FROM menu_items")
+        rows = cur.fetchall()
         by_name: dict[str, str] = {}
         for row in rows:
             name = (row["name_en"] or "").strip().lower()
@@ -381,8 +438,8 @@ def backfill_missing_menu_images() -> int:
             donor = by_name.get(name)
             if not donor:
                 continue
-            conn.execute(
-                "UPDATE menu_items SET image_url = ? WHERE id = ?",
+            cur.execute(
+                "UPDATE menu_items SET image_url = %s WHERE id = %s",
                 (donor, row["id"]),
             )
             updated += 1
@@ -393,17 +450,19 @@ def backfill_missing_menu_images() -> int:
 
 
 def get_shop_settings(shop_id: int):
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT id, name_en, name_km, name_zh, logo_url, primary_color,
                    background_color, background_image_url, khqr_url,
                    current_festival_id, group_invite_link
-            FROM shop_settings WHERE id = ?
+            FROM shop_settings WHERE id = %s
             """,
             (shop_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -426,17 +485,18 @@ def update_shop_settings(shop_id: int, **fields) -> bool:
     if not updates:
         return False
 
-    set_clause = ", ".join(f"{key} = ?" for key in updates)
+    set_clause = ", ".join(f"{key} = %s" for key in updates)
     values = list(updates.values()) + [shop_id]
 
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        cursor = conn.execute(
-            f"UPDATE shop_settings SET {set_clause} WHERE id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            f"UPDATE shop_settings SET {set_clause} WHERE id = %s",
             values,
         )
         conn.commit()
-        return cursor.rowcount > 0
+        return cur.rowcount > 0
     finally:
         conn.close()
 
@@ -451,14 +511,16 @@ def add_menu_item(
     image_url: str | None = None,
     is_vegetarian: int = 0,
 ) -> dict:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        cursor = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             INSERT INTO menu_items
                 (shop_id, category, name_en, name_km, name_zh, price, image_url,
                  is_vegetarian)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 shop_id,
@@ -471,50 +533,55 @@ def add_menu_item(
                 int(bool(is_vegetarian)),
             ),
         )
+        item_id = cur.fetchone()["id"]
         conn.commit()
-        item_id = cursor.lastrowid
-        row = conn.execute(
+        cur.execute(
             """
             SELECT id, shop_id, category, name_en, name_km, name_zh, price,
                    image_url, is_vegetarian
-            FROM menu_items WHERE id = ?
+            FROM menu_items WHERE id = %s
             """,
             (item_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return dict(row)
     finally:
         conn.close()
 
 
 def get_menu_items(shop_id: int) -> list[dict]:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT id, shop_id, category, name_en, name_km, name_zh, price,
                    image_url, is_vegetarian
             FROM menu_items
-            WHERE shop_id = ?
-            ORDER BY category COLLATE NOCASE, id
+            WHERE shop_id = %s
+            ORDER BY LOWER(category), id
             """,
             (shop_id,),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
 
 
 def list_festivals() -> list[dict]:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT id, name_en, name_km, name_zh, start_date, end_date,
                    discount_percent, is_vegetarian
             FROM festivals
             ORDER BY start_date, id
             """
-        ).fetchall()
+        )
+        rows = cur.fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -523,16 +590,18 @@ def list_festivals() -> list[dict]:
 def get_festival(festival_id: int | None) -> dict | None:
     if not festival_id:
         return None
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT id, name_en, name_km, name_zh, start_date, end_date,
                    discount_percent, is_vegetarian
-            FROM festivals WHERE id = ?
+            FROM festivals WHERE id = %s
             """,
             (int(festival_id),),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -569,14 +638,16 @@ def create_order(
         order_type = "takeaway"
     if status not in ORDER_STATUSES:
         status = "pending"
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        cursor = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             INSERT INTO orders
                 (shop_id, customer_id, customer_name, items, total, status,
                  customer_language, coupon_code, discount_amount, order_type, queue_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 shop_id,
@@ -592,25 +663,27 @@ def create_order(
                 queue_id,
             ),
         )
+        order_id = cur.fetchone()["id"]
         conn.commit()
-        order_id = cursor.lastrowid
         return get_order(order_id)
     finally:
         conn.close()
 
 
 def get_order(order_id: int) -> dict | None:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT id, shop_id, customer_id, customer_name, items, total, status,
                    created_at, payment_image_url, payment_amount, customer_language,
                    coupon_code, discount_amount, order_type, queue_id
-            FROM orders WHERE id = ?
+            FROM orders WHERE id = %s
             """,
             (order_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -619,14 +692,15 @@ def get_order(order_id: int) -> dict | None:
 def update_order_status(order_id: int, status: str) -> bool:
     if status not in ORDER_STATUSES:
         raise ValueError(f"Invalid order status: {status}")
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        cursor = conn.execute(
-            "UPDATE orders SET status = ? WHERE id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "UPDATE orders SET status = %s WHERE id = %s",
             (status, order_id),
         )
         conn.commit()
-        return cursor.rowcount > 0
+        return cur.rowcount > 0
     finally:
         conn.close()
 
@@ -639,18 +713,19 @@ def update_order_payment(
 ) -> bool:
     if status not in ORDER_STATUSES:
         raise ValueError(f"Invalid order status: {status}")
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        cursor = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             UPDATE orders
-            SET payment_amount = ?, payment_image_url = ?, status = ?
-            WHERE id = ?
+            SET payment_amount = %s, payment_image_url = %s, status = %s
+            WHERE id = %s
             """,
             (payment_amount, payment_image_url, status, order_id),
         )
         conn.commit()
-        return cursor.rowcount > 0
+        return cur.rowcount > 0
     finally:
         conn.close()
 
@@ -660,15 +735,17 @@ def order_number(order_id: int) -> str:
 
 
 def count_completed_orders(customer_id: int) -> int:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT COUNT(*) AS cnt FROM orders
-            WHERE customer_id = ? AND status = 'completed'
+            WHERE customer_id = %s AND status = 'completed'
             """,
             (customer_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return int(row["cnt"] if row else 0)
     finally:
         conn.close()
@@ -694,13 +771,15 @@ def create_coupon(
 ) -> dict:
     if coupon_type not in ("fixed", "percent"):
         raise ValueError("type must be fixed or percent")
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        cursor = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             INSERT INTO coupons
                 (code, type, value, min_order, shop_id, usage_limit, used_count, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, 0, %s)
+            RETURNING id
             """,
             (
                 code.strip().upper(),
@@ -712,28 +791,33 @@ def create_coupon(
                 expires_at,
             ),
         )
+        coupon_id = cur.fetchone()["id"]
         conn.commit()
-        return get_coupon_by_id(cursor.lastrowid)
+        return get_coupon_by_id(coupon_id)
     finally:
         conn.close()
 
 
 def get_coupon_by_id(coupon_id: int) -> dict | None:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute("SELECT * FROM coupons WHERE id = ?", (coupon_id,)).fetchone()
+        cur = _cursor(conn)
+        cur.execute("SELECT * FROM coupons WHERE id = %s", (coupon_id,))
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
 
 
 def get_coupon_by_code(code: str) -> dict | None:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
-            "SELECT * FROM coupons WHERE UPPER(code) = UPPER(?)",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT * FROM coupons WHERE UPPER(code) = UPPER(%s)",
             (code.strip(),),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -741,16 +825,18 @@ def get_coupon_by_code(code: str) -> dict | None:
 
 def assign_coupon_to_user(user_id: int, coupon_id: int) -> bool:
     """Assign coupon to user if not already assigned. Returns True if newly assigned."""
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        existing = conn.execute(
-            "SELECT id FROM user_coupons WHERE user_id = ? AND coupon_id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT id FROM user_coupons WHERE user_id = %s AND coupon_id = %s",
             (user_id, coupon_id),
-        ).fetchone()
+        )
+        existing = cur.fetchone()
         if existing:
             return False
-        conn.execute(
-            "INSERT INTO user_coupons (user_id, coupon_id, used) VALUES (?, ?, 0)",
+        cur.execute(
+            "INSERT INTO user_coupons (user_id, coupon_id, used) VALUES (%s, %s, 0)",
             (user_id, coupon_id),
         )
         conn.commit()
@@ -760,12 +846,14 @@ def assign_coupon_to_user(user_id: int, coupon_id: int) -> bool:
 
 
 def user_has_coupon(user_id: int, coupon_id: int) -> bool:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
-            "SELECT id FROM user_coupons WHERE user_id = ? AND coupon_id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT id FROM user_coupons WHERE user_id = %s AND coupon_id = %s",
             (user_id, coupon_id),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return row is not None
     finally:
         conn.close()
@@ -851,15 +939,17 @@ def validate_coupon(code: str, user_id: int, total: float, shop_id: int = 1) -> 
             "min_order": float(coupon.get("min_order") or 0),
         }
 
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        uc = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT id, used FROM user_coupons
-            WHERE user_id = ? AND coupon_id = ?
+            WHERE user_id = %s AND coupon_id = %s
             """,
             (user_id, coupon["id"]),
-        ).fetchone()
+        )
+        uc = cur.fetchone()
         # Personal coupons (WELCOME/REF) must be assigned and unused
         personal_prefix = coupon["code"].upper().startswith(
             ("WELCOME", "REF_", "POINTS100", "TIKTOK5")
@@ -892,26 +982,28 @@ def mark_coupon_used(code: str, user_id: int) -> bool:
     coupon = get_coupon_by_code(code)
     if not coupon:
         return False
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
-            UPDATE coupons SET used_count = used_count + 1 WHERE id = ?
+            UPDATE coupons SET used_count = used_count + 1 WHERE id = %s
             """,
             (coupon["id"],),
         )
-        existing = conn.execute(
-            "SELECT id FROM user_coupons WHERE user_id = ? AND coupon_id = ?",
+        cur.execute(
+            "SELECT id FROM user_coupons WHERE user_id = %s AND coupon_id = %s",
             (user_id, coupon["id"]),
-        ).fetchone()
+        )
+        existing = cur.fetchone()
         if existing:
-            conn.execute(
-                "UPDATE user_coupons SET used = 1 WHERE user_id = ? AND coupon_id = ?",
+            cur.execute(
+                "UPDATE user_coupons SET used = 1 WHERE user_id = %s AND coupon_id = %s",
                 (user_id, coupon["id"]),
             )
         else:
-            conn.execute(
-                "INSERT INTO user_coupons (user_id, coupon_id, used) VALUES (?, ?, 1)",
+            cur.execute(
+                "INSERT INTO user_coupons (user_id, coupon_id, used) VALUES (%s, %s, 1)",
                 (user_id, coupon["id"]),
             )
         conn.commit()
@@ -921,18 +1013,20 @@ def mark_coupon_used(code: str, user_id: int) -> bool:
 
 
 def get_user_unused_coupons(user_id: int) -> list[dict]:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT c.id, c.code, c.type, c.value, c.min_order, c.expires_at, c.usage_limit, c.used_count
             FROM user_coupons uc
             JOIN coupons c ON c.id = uc.coupon_id
-            WHERE uc.user_id = ? AND uc.used = 0
+            WHERE uc.user_id = %s AND uc.used = 0
             ORDER BY uc.id DESC
             """,
             (user_id,),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
         result = []
         for row in rows:
             coupon = dict(row)
@@ -949,38 +1043,45 @@ def get_user_unused_coupons(user_id: int) -> list[dict]:
 def create_referral(referrer_id: int, referred_id: int) -> dict | None:
     if referrer_id == referred_id:
         return None
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        existing = conn.execute(
-            "SELECT * FROM referrals WHERE referred_id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT * FROM referrals WHERE referred_id = %s",
             (referred_id,),
-        ).fetchone()
+        )
+        existing = cur.fetchone()
         if existing:
             return dict(existing)
-        cursor = conn.execute(
+        cur.execute(
             """
             INSERT INTO referrals (referrer_id, referred_id, status, reward_given)
-            VALUES (?, ?, 'pending', 0)
+            VALUES (%s, %s, 'pending', 0)
+            RETURNING id
             """,
             (referrer_id, referred_id),
         )
+        referral_id = cur.fetchone()["id"]
         conn.commit()
-        row = conn.execute(
-            "SELECT * FROM referrals WHERE id = ?",
-            (cursor.lastrowid,),
-        ).fetchone()
+        cur.execute(
+            "SELECT * FROM referrals WHERE id = %s",
+            (referral_id,),
+        )
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
 
 
 def get_referral_for_referred(referred_id: int) -> dict | None:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
-            "SELECT * FROM referrals WHERE referred_id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT * FROM referrals WHERE referred_id = %s",
             (referred_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -1005,13 +1106,14 @@ def process_referral_rewards(referred_id: int) -> list[dict]:
         coupon = create_and_assign_fixed_coupon(uid, value=1.0, code=code)
         created.append({"user_id": uid, "coupon": coupon})
 
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             UPDATE referrals
             SET reward_given = 1, status = 'rewarded'
-            WHERE id = ?
+            WHERE id = %s
             """,
             (referral["id"],),
         )
@@ -1026,34 +1128,38 @@ def process_referral_rewards(referred_id: int) -> list[dict]:
 
 
 def ensure_customer(user_id: int, first_name: str | None = None) -> dict:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
-            "SELECT user_id, first_name, points FROM customers WHERE user_id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT user_id, first_name, points FROM customers WHERE user_id = %s",
             (user_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         if row:
             if first_name and not row["first_name"]:
-                conn.execute(
-                    "UPDATE customers SET first_name = ? WHERE user_id = ?",
+                cur.execute(
+                    "UPDATE customers SET first_name = %s WHERE user_id = %s",
                     (first_name, user_id),
                 )
                 conn.commit()
-                row = conn.execute(
-                    "SELECT user_id, first_name, points FROM customers WHERE user_id = ?",
+                cur.execute(
+                    "SELECT user_id, first_name, points FROM customers WHERE user_id = %s",
                     (user_id,),
-                ).fetchone()
+                )
+                row = cur.fetchone()
             return dict(row)
 
-        conn.execute(
-            "INSERT INTO customers (user_id, first_name, points) VALUES (?, ?, 0)",
+        cur.execute(
+            "INSERT INTO customers (user_id, first_name, points) VALUES (%s, %s, 0)",
             (user_id, first_name),
         )
         conn.commit()
-        row = conn.execute(
-            "SELECT user_id, first_name, points FROM customers WHERE user_id = ?",
+        cur.execute(
+            "SELECT user_id, first_name, points FROM customers WHERE user_id = %s",
             (user_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return dict(row)
     finally:
         conn.close()
@@ -1066,17 +1172,19 @@ def get_customer_points(user_id: int) -> int:
 
 def add_customer_points(user_id: int, amount: int, first_name: str | None = None) -> int:
     ensure_customer(user_id, first_name=first_name)
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        conn.execute(
-            "UPDATE customers SET points = COALESCE(points, 0) + ? WHERE user_id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "UPDATE customers SET points = COALESCE(points, 0) + %s WHERE user_id = %s",
             (int(amount), user_id),
         )
         conn.commit()
-        row = conn.execute(
-            "SELECT points FROM customers WHERE user_id = ?",
+        cur.execute(
+            "SELECT points FROM customers WHERE user_id = %s",
             (user_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return int(row["points"] if row else 0)
     finally:
         conn.close()
@@ -1088,21 +1196,23 @@ def redeem_points_for_coupon(user_id: int, cost: int = 100, value: float = 1.0) 
     Returns {ok, points?, coupon?, error?}
     """
     ensure_customer(user_id)
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
-            "SELECT points FROM customers WHERE user_id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT points FROM customers WHERE user_id = %s",
             (user_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         points = int(row["points"] if row else 0)
         if points < cost:
             return {"ok": False, "error": "insufficient_points", "points": points}
 
-        conn.execute(
-            "UPDATE customers SET points = points - ? WHERE user_id = ? AND points >= ?",
+        cur.execute(
+            "UPDATE customers SET points = points - %s WHERE user_id = %s AND points >= %s",
             (cost, user_id, cost),
         )
-        if conn.total_changes == 0:
+        if cur.rowcount == 0:
             conn.rollback()
             return {"ok": False, "error": "insufficient_points", "points": points}
         conn.commit()
@@ -1124,12 +1234,14 @@ def redeem_points_for_coupon(user_id: int, cost: int = 100, value: float = 1.0) 
 
 
 def get_review_by_order_user(order_id: int, user_id: int) -> dict | None:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
-            "SELECT * FROM reviews WHERE order_id = ? AND user_id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT * FROM reviews WHERE order_id = %s AND user_id = %s",
             (order_id, user_id),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -1149,17 +1261,19 @@ def create_review(
         raise ValueError("already_reviewed")
 
     ensure_customer(user_id, first_name=first_name)
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        cursor = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             INSERT INTO reviews (order_id, user_id, rating, comment, image_url, is_featured)
-            VALUES (?, ?, ?, ?, ?, 0)
+            VALUES (%s, %s, %s, %s, %s, 0)
+            RETURNING id
             """,
             (order_id, user_id, int(rating), comment, image_url),
         )
+        review_id = cur.fetchone()["id"]
         conn.commit()
-        review_id = cursor.lastrowid
     finally:
         conn.close()
 
@@ -1170,60 +1284,67 @@ def create_review(
 
 
 def get_review(review_id: int) -> dict | None:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute("SELECT * FROM reviews WHERE id = ?", (review_id,)).fetchone()
+        cur = _cursor(conn)
+        cur.execute("SELECT * FROM reviews WHERE id = %s", (review_id,))
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
 
 
 def list_recent_reviews(limit: int = 20) -> list[dict]:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT r.*, c.first_name, o.customer_name
             FROM reviews r
             LEFT JOIN customers c ON c.user_id = r.user_id
             LEFT JOIN orders o ON o.id = r.order_id
             ORDER BY r.id DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (limit,),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
 
 
 def set_review_featured(review_id: int, featured: bool = True) -> bool:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        cursor = conn.execute(
-            "UPDATE reviews SET is_featured = ? WHERE id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "UPDATE reviews SET is_featured = %s WHERE id = %s",
             (1 if featured else 0, review_id),
         )
         conn.commit()
-        return cursor.rowcount > 0
+        return cur.rowcount > 0
     finally:
         conn.close()
 
 
 def delete_review(review_id: int) -> bool:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        cursor = conn.execute("DELETE FROM reviews WHERE id = ?", (review_id,))
+        cur = _cursor(conn)
+        cur.execute("DELETE FROM reviews WHERE id = %s", (review_id,))
         conn.commit()
-        return cursor.rowcount > 0
+        return cur.rowcount > 0
     finally:
         conn.close()
 
 
 def get_featured_reviews(shop_id: int = 1, limit: int = 20) -> list[dict]:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT r.id, r.order_id, r.user_id, r.rating, r.comment, r.image_url,
                    r.created_at, COALESCE(c.first_name, o.customer_name, 'Guest') AS first_name
@@ -1231,12 +1352,13 @@ def get_featured_reviews(shop_id: int = 1, limit: int = 20) -> list[dict]:
             LEFT JOIN customers c ON c.user_id = r.user_id
             LEFT JOIN orders o ON o.id = r.order_id
             WHERE r.is_featured = 1
-              AND (o.shop_id = ? OR o.shop_id IS NULL)
+              AND (o.shop_id = %s OR o.shop_id IS NULL)
             ORDER BY r.id DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (shop_id, limit),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -1247,28 +1369,33 @@ def create_tiktok_submission(
     video_url: str,
     order_id: int | None = None,
 ) -> dict:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        cursor = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             INSERT INTO tiktok_submissions (user_id, order_id, video_url, status, reward_given)
-            VALUES (?, ?, ?, 'pending', 0)
+            VALUES (%s, %s, %s, 'pending', 0)
+            RETURNING id
             """,
             (user_id, order_id, video_url.strip()),
         )
+        submission_id = cur.fetchone()["id"]
         conn.commit()
-        return get_tiktok_submission(cursor.lastrowid)
+        return get_tiktok_submission(submission_id)
     finally:
         conn.close()
 
 
 def get_tiktok_submission(submission_id: int) -> dict | None:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
-            "SELECT * FROM tiktok_submissions WHERE id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT * FROM tiktok_submissions WHERE id = %s",
             (submission_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -1279,19 +1406,20 @@ def update_tiktok_submission(
     status: str,
     reward_given: int | None = None,
 ) -> dict | None:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
+        cur = _cursor(conn)
         if reward_given is None:
-            conn.execute(
-                "UPDATE tiktok_submissions SET status = ? WHERE id = ?",
+            cur.execute(
+                "UPDATE tiktok_submissions SET status = %s WHERE id = %s",
                 (status, submission_id),
             )
         else:
-            conn.execute(
+            cur.execute(
                 """
                 UPDATE tiktok_submissions
-                SET status = ?, reward_given = ?
-                WHERE id = ?
+                SET status = %s, reward_given = %s
+                WHERE id = %s
                 """,
                 (status, int(reward_given), submission_id),
             )
@@ -1302,61 +1430,69 @@ def update_tiktok_submission(
 
 
 def get_queue_entry(queue_id: int) -> dict | None:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute("SELECT * FROM queue WHERE id = ?", (queue_id,)).fetchone()
+        cur = _cursor(conn)
+        cur.execute("SELECT * FROM queue WHERE id = %s", (queue_id,))
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
 
 
 def get_active_queue_for_user(shop_id: int, user_id: int) -> dict | None:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT * FROM queue
-            WHERE shop_id = ? AND user_id = ?
+            WHERE shop_id = %s AND user_id = %s
               AND status IN ('waiting', 'ordering', 'ready')
             ORDER BY id DESC
             LIMIT 1
             """,
             (shop_id, user_id),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
 
 
 def list_active_queue(shop_id: int = 1) -> list[dict]:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT * FROM queue
-            WHERE shop_id = ? AND status IN ('waiting', 'ordering', 'ready')
+            WHERE shop_id = %s AND status IN ('waiting', 'ordering', 'ready')
             ORDER BY queue_number ASC, id ASC
             """,
             (shop_id,),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
 
 
 def estimate_queue_wait(shop_id: int, queue_number: int) -> int:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT COUNT(*) AS ahead
             FROM queue
-            WHERE shop_id = ?
+            WHERE shop_id = %s
               AND status = 'waiting'
-              AND queue_number < ?
+              AND queue_number < %s
             """,
             (shop_id, queue_number),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         ahead = int(row["ahead"] if row else 0)
         return max(0, ahead * MINUTES_PER_PARTY)
     finally:
@@ -1370,27 +1506,31 @@ def join_queue(shop_id: int, user_id: int, party_size: int) -> dict:
         wait = estimate_queue_wait(shop_id, int(existing["queue_number"]))
         return {**existing, "estimated_wait": wait, "already_in_queue": True}
 
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT COALESCE(MAX(queue_number), 0) AS max_num
             FROM queue
-            WHERE shop_id = ?
-              AND date(created_at) = date('now', 'localtime')
+            WHERE shop_id = %s
+              AND created_at::date = CURRENT_DATE
             """,
             (shop_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         next_num = int(row["max_num"] or 0) + 1
-        cursor = conn.execute(
+        cur.execute(
             """
             INSERT INTO queue (shop_id, user_id, queue_number, party_size, status)
-            VALUES (?, ?, ?, ?, 'waiting')
+            VALUES (%s, %s, %s, %s, 'waiting')
+            RETURNING id
             """,
             (shop_id, user_id, next_num, party_size),
         )
+        queue_id = cur.fetchone()["id"]
         conn.commit()
-        entry = get_queue_entry(cursor.lastrowid)
+        entry = get_queue_entry(queue_id)
         wait = estimate_queue_wait(shop_id, next_num)
         return {**entry, "estimated_wait": wait, "already_in_queue": False}
     finally:
@@ -1400,10 +1540,11 @@ def join_queue(shop_id: int, user_id: int, party_size: int) -> dict:
 def update_queue_status(queue_id: int, status: str) -> dict | None:
     if status not in QUEUE_STATUSES:
         raise ValueError(f"Invalid queue status: {status}")
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        conn.execute(
-            "UPDATE queue SET status = ? WHERE id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "UPDATE queue SET status = %s WHERE id = %s",
             (status, queue_id),
         )
         conn.commit()
@@ -1413,17 +1554,19 @@ def update_queue_status(queue_id: int, status: str) -> dict | None:
 
 
 def advance_next_waiting(shop_id: int = 1) -> dict | None:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        row = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT * FROM queue
-            WHERE shop_id = ? AND status = 'waiting'
+            WHERE shop_id = %s AND status = 'waiting'
             ORDER BY queue_number ASC, id ASC
             LIMIT 1
             """,
             (shop_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         if not row:
             return None
         queue_id = int(row["id"])
@@ -1433,19 +1576,21 @@ def advance_next_waiting(shop_id: int = 1) -> dict | None:
 
 
 def get_orders_in_range(shop_id: int, start_date: str, end_date: str) -> list[dict]:
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT *
             FROM orders
-            WHERE shop_id = ?
-              AND date(created_at) >= date(?)
-              AND date(created_at) <= date(?)
+            WHERE shop_id = %s
+              AND created_at::date >= %s::date
+              AND created_at::date <= %s::date
             ORDER BY id ASC
             """,
             (shop_id, start_date, end_date),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -1454,28 +1599,30 @@ def get_orders_in_range(shop_id: int, start_date: str, end_date: str) -> list[di
 def get_order_stats(shop_id: int, period: str = "today") -> dict:
     period = (period or "today").lower()
     if period == "week":
-        start_expr = "date('now', 'localtime', '-6 days')"
-        end_expr = "date('now', 'localtime')"
+        start_expr = "(CURRENT_DATE - INTERVAL '6 days')"
+        end_expr = "CURRENT_DATE"
         label = "week"
     else:
-        start_expr = "date('now', 'localtime')"
-        end_expr = "date('now', 'localtime')"
+        start_expr = "CURRENT_DATE"
+        end_expr = "CURRENT_DATE"
         label = "today"
 
-    conn = get_connection()
+    conn = get_db_connection()
     try:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             f"""
             SELECT id, items, total, status, created_at, order_type
             FROM orders
-            WHERE shop_id = ?
-              AND date(created_at) >= {start_expr}
-              AND date(created_at) <= {end_expr}
+            WHERE shop_id = %s
+              AND created_at::date >= {start_expr}
+              AND created_at::date <= {end_expr}
               AND status != 'cancelled'
             ORDER BY id ASC
             """,
             (shop_id,),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
         orders = [dict(row) for row in rows]
     finally:
         conn.close()
